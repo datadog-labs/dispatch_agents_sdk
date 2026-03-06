@@ -1,6 +1,6 @@
 # Dispatch SDK
 
-Dispatch Agents is a platform for building and deploying AI agents. This SDK lets you define agent handlers using simple Python decorators and run them anywhere — locally or in the cloud.
+Dispatch Agents is a platform for building and deploying AI agents, currently in public preview at [dispatchagents.ai](https://dispatchagents.ai/). This SDK lets you define agent handlers using simple Python decorators and run them anywhere — locally or in the cloud.
 
 ## Installation
 
@@ -46,4 +46,3 @@ async def get_weather(request: WeatherRequest) -> WeatherResponse:
 ## Support
 
 - **GitHub Issues:** [github.com/datadog-labs/dispatch_agents_sdk/issues](https://github.com/datadog-labs/dispatch_agents_sdk/issues)
-- **Slack:** `#dispatch-agents` (internal)
