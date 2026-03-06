@@ -49,4 +49,3 @@ Provides MCP tools for agent lifecycle management:
 ## Support
 
 - **GitHub Issues:** [Open an issue](https://github.com/datadog-labs/dispatch_agents_sdk/issues) for bugs, feature requests, or questions
-- **Slack:** `#dispatch-agents` (internal)

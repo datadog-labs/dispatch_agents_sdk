@@ -37,4 +37,3 @@ dispatch agent send-event --topic hello_world --payload '{"message": "hello"}'
 ## Support
 
 - **Issues:** [GitHub Issues](https://github.com/datadog-labs/dispatch_agents_examples/issues)
-- **Slack:** `#dispatch-agents` (internal)
