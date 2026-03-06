@@ -1,0 +1,12 @@
+[project]
+name = "trace-stress-test"
+version = "0.1.0"
+description = "Stress-tests the trace builder by spawning parallel Claude subagents"
+requires-python = ">=3.11"
+dependencies = [
+    "dispatch-agents",
+    "claude-agent-sdk>=0.1.31",
+]
+
+[tool.uv.sources]
+dispatch-agents = { path = "../../sdk" }

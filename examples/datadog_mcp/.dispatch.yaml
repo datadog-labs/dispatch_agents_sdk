@@ -1,0 +1,12 @@
+namespace: examples
+entrypoint: agent.py
+base_image: python:3.11-slim
+system_packages: []
+agent_name: datadog-mcp
+secrets:
+- name: ANTHROPIC_API_KEY
+  secret_id: /shared/anthropic-api-key
+- name: OPENAI_API_KEY
+  secret_id: /shared/openai-api-key
+mcp_servers:
+- server: datadog

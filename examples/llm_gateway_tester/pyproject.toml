@@ -1,0 +1,13 @@
+[project]
+name = "llm-gateway-tester"
+version = "0.1.0"
+requires-python = "~=3.13.0"
+dependencies = [
+    "anthropic>=0.84.0",
+    "dispatch-agents",
+    "httpx>=0.28.1",
+    "openai>=2.24.0",
+]
+
+[tool.uv.sources]
+dispatch-agents = { path = "../../sdk" }

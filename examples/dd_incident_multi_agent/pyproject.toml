@@ -1,0 +1,14 @@
+[project]
+name = "dd-incident-multi-agent"
+version = "0.1.0"
+description = "LangGraph-based multi-agent incident investigation system"
+dependencies = [
+    "dispatch-agents",
+    "langchain-core>=0.3.81",
+    "langchain-openai>=0.2.14",
+    "langgraph>=0.2.76",
+    "pydantic>=2.0.3",
+]
+
+[tool.uv.sources]
+dispatch-agents = { path = "../../sdk" }

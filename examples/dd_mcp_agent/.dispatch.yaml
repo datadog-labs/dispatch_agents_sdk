@@ -1,0 +1,10 @@
+namespace: examples
+entrypoint: agent_main.py
+base_image: python:3.11-slim
+system_packages: []
+agent_name: dd-logs-agentic-search
+secrets:
+- name: DD_API_KEY
+  secret_id: shared/dd-api-key
+- name: DD_APP_KEY
+  secret_id: shared/dd-app-key

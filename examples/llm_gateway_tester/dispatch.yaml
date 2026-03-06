@@ -1,0 +1,11 @@
+namespace: examples
+entrypoint: agent.py
+base_image: python:3.13-slim
+system_packages: []
+agent_name: llm-gateway-tester
+volumes:
+- name: data
+  mountPath: /data
+  mode: read_write_many
+mcp_servers:
+- server: datadog

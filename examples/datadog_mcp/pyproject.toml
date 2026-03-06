@@ -1,0 +1,14 @@
+[project]
+name = "datadog-mcp"
+version = "0.1.0"
+description = "Example agent using Datadog MCP server via the MCP Registry"
+requires-python = ">=3.11"
+dependencies = [
+    "dispatch-agents",
+    "httpx>=0.27.2",
+    "claude-agent-sdk>=0.1.31",
+    "openai-agents>=0.0.19",
+]
+
+[tool.uv.sources]
+dispatch-agents = { path = "../../sdk" }
