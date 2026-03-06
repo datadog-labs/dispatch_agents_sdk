@@ -1,0 +1,9 @@
+namespace: examples
+entrypoint: agent.py
+base_image: python:3.13-slim
+system_packages: []
+agent_name: hello-world
+resources:
+  limits:
+    cpu: 250m
+    memory: 2Gi

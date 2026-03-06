@@ -1,0 +1,9 @@
+{
+  "name": "dispatch-agents",
+  "description": "Getting started skill and Dispatch Operator MCP server for building Dispatch Agents",
+  "version": "1.0.0",
+  "author": {
+    "name": "Dispatch Agents Team",
+    "email": "dispatch-agents@datadoghq.com"
+  }
+}
