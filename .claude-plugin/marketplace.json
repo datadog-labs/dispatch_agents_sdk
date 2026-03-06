@@ -1,0 +1,22 @@
+{
+  "name": "dispatch-agents",
+  "owner": {
+    "name": "Dispatch Agents Team",
+    "email": "dispatch-agents@datadoghq.com"
+  },
+  "metadata": {
+    "description": "Official plugins for building and managing Dispatch Agents"
+  },
+  "plugins": [
+    {
+      "name": "dispatch-agents",
+      "source": "./plugins/dispatch-agents",
+      "description": "Getting started skill and Dispatch Operator MCP server for building Dispatch Agents",
+      "version": "0.1.0",
+      "author": {
+        "name": "Dispatch Agents Team"
+      },
+      "keywords": ["dispatch", "agents", "mcp"]
+    }
+  ]
+}

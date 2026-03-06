@@ -1,0 +1,56 @@
+# Shared lint configuration for all example agents
+# This file provides ruff and mypy configuration for the examples/ directory
+
+[project]
+name = "dispatch-examples"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[tool.uv]
+dev-dependencies = [
+    "ruff>=0.8.0",
+    "mypy>=1.18.2",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "B007",  # unused loop control variable
+    "B008",  # do not perform function calls in argument defaults
+    "B023",  # function does not bind loop variable
+    "B904",  # raise ... from err
+    "B905",  # zip() without explicit strict parameter
+    "C403",  # unnecessary list comprehension
+    "C416",  # unnecessary dict comprehension
+    "C901",  # too complex
+    "W191",  # indentation contains tabs
+    "E402",  # module level import not at top of file
+    "F822",  # undefined name in __all__
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = false
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+explicit_package_bases = true
+check_untyped_defs = false
+strict_optional = false

@@ -1,0 +1,117 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dispatch_agents"
+version = "0.7.2"
+description = "Dispatch Agents SDK"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.11.10",
+    "pytest-asyncio>=1.1.1",
+    "httpx>=0.25.2",
+    "grpcio>=1.78.0",
+    "protobuf==6.33.5",
+    "tomlkit>=0.13.3",
+    "aiohttp>=3.13.3",
+    "pyyaml>=6.0.3",
+    "mcp>=1.26.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4.2",
+    "pygments>=2.19.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+    "pygments>=2.19.2",
+    "ruff>=0.14.1",
+    "mypy>=1.18.2",
+    "pydoctor>=25.10.1",
+    "types-protobuf>=6.32.1.20250918",
+    "types-grpcio>=1.0.0.20251009",
+    "types-requests>=2.31.0",
+    "pytest-cov>=7.0.0",
+    "langchain-core>=1.2.13",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["dispatch_agents", "agentservice"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+python_files = ["test*.py"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+exclude = [
+    "agentservice",  # Exclude generated protobuf code
+]
+extend-exclude = [
+    "*_pb2.py",
+    "*_pb2_grpc.py",
+    "*_pb2.pyi",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "B007",  # unused loop control variable
+    "B008",  # do not perform function calls in argument defaults
+    "B023",  # function does not bind loop variable
+    "B904",  # raise ... from err
+    "B905",  # zip() without explicit strict parameter
+    "C403",  # unnecessary list comprehension
+    "C416",  # unnecessary dict comprehension
+    "C901",  # too complex
+    "W191",  # indentation contains tabs
+    "E402",  # module level import not at top of file
+    "F822",  # undefined name in __all__
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = false
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+explicit_package_bases = true
+check_untyped_defs = true
+strict_optional = true
+exclude = ["agentservice/"]
+
+# Skip type checking for generated protobuf files
+[[tool.mypy.overrides]]
+module = [
+    "agentservice.*",
+]
+ignore_errors = true
+
+[tool.pydoctor]
+add-package = ["dispatch_agents"]
+docformat = "google"
+html-output = "build/apidocs"
+html-viewsource-base = "https://github.com/DataDog/dispatch_agents/tree/main"
+project-name = "Dispatch Agents"
+sidebar-expand-depth = 2
+intersphinx = [
+    "https://docs.python.org/3/objects.inv",
+]
