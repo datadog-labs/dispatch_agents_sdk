@@ -1,0 +1,12 @@
+Component,Origin,License,Copyright
+aiohttp,pypi,Apache-2.0,Copyright aiohttp contributors
+googleapis/googleapis,buf.build,Apache-2.0,Copyright Google LLC
+grpc-ecosystem/grpc-gateway,buf.build,BSD-3-Clause,Copyright gRPC-Ecosystem Authors
+grpcio,pypi,Apache-2.0,Copyright The gRPC Authors
+httpx,pypi,BSD-3-Clause,Copyright Tom Christie
+mcp,pypi,MIT,Copyright Anthropic PBC
+protobuf,pypi,BSD-3-Clause,Copyright Google LLC
+pydantic,pypi,MIT,Copyright Samuel Colvin and contributors
+pytest-asyncio,pypi,Apache-2.0,Copyright Tin Tvrtković and contributors
+pyyaml,pypi,MIT,Copyright Kirill Simonov
+tomlkit,pypi,MIT,Copyright Sébastien Eustace
