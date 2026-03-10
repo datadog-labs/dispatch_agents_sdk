@@ -4,7 +4,7 @@ Welcome! We're glad you're interested in contributing to the Dispatch Agents SDK
 
 Note that the core Dispatch Agents platform is closed-source and does not live in this repo. However, we welcome contributions to the SDK, including bug fixes, improvements, and new features.
 
-We also welcome bug reports, feature requests, and general feedback via [GitHub Issues](https://github.com/datadog-labs/dispatch_sdk/issues).
+We also welcome bug reports, feature requests, and general feedback via [GitHub Issues](https://github.com/datadog-labs/dispatch_agents_sdk/issues).
 
 ## Contributing
 
