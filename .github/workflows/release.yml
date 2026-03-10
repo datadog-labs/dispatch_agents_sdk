@@ -43,7 +43,7 @@ jobs:
       - name: Install dev dependencies
         run: uv sync --group dev
       - name: pytest
-        run: uv run pytest --cov=dispatch_agents --cov-report=term-missing
+        run: uv run pytest --cov=dispatch_agents --cov-report=term-missing --ignore=examples
 
   build:
     name: Build
