@@ -54,7 +54,26 @@ logging.getLogger("httpx").addFilter(_SubscribeLogFilter())
 
 # File-based health signal for ECS container health checks.
 # Written on successful subscription, removed on failure.
-_HEALTH_FILE = Path("/tmp/.dispatch_healthy")
+# Uses /app/ (owned by dispatch user) instead of /tmp/ which may be
+# unwritable on containers with readonlyRootFilesystem before the
+# /tmp volume mount was added.
+_HEALTH_FILE = Path("/app/.dispatch_healthy")
+
+
+def _mark_healthy() -> None:
+    """Best-effort: create health marker file."""
+    try:
+        _HEALTH_FILE.touch()
+    except OSError as exc:
+        logger.warning("Could not write health file %s: %s", _HEALTH_FILE, exc)
+
+
+def _mark_unhealthy() -> None:
+    """Best-effort: remove health marker file."""
+    try:
+        _HEALTH_FILE.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("Could not remove health file %s: %s", _HEALTH_FILE, exc)
 
 
 class AgentServiceServicer(service_pb2_grpc.AgentServiceServicer):
@@ -310,11 +329,11 @@ async def _subscribe_registered_triggers(
                 logger.debug(log_msg)
 
         # Signal healthy to ECS container health check
-        _HEALTH_FILE.touch()
+        _mark_healthy()
         return True  # Success
 
     except httpx.ConnectError as e:
-        _HEALTH_FILE.unlink(missing_ok=True)
+        _mark_unhealthy()
         error_msg = (
             f"Failed to connect to backend at {url}. "
             f"Connection error: {e}. "
@@ -328,7 +347,7 @@ async def _subscribe_registered_triggers(
         return False  # Signal failure for retry tracking
 
     except httpx.HTTPStatusError as e:
-        _HEALTH_FILE.unlink(missing_ok=True)
+        _mark_unhealthy()
         error_msg = (
             f"Backend returned error status {e.response.status_code} for {url}. "
             f"Response: {e.response.text}"
@@ -338,7 +357,7 @@ async def _subscribe_registered_triggers(
         raise RuntimeError(error_msg) from e
 
     except httpx.TimeoutException as e:
-        _HEALTH_FILE.unlink(missing_ok=True)
+        _mark_unhealthy()
         error_msg = f"Timeout connecting to backend at {url} after 10s: {e}"
         logger.error(error_msg)
         # Exit with error if we're in a deployed environment
@@ -348,7 +367,7 @@ async def _subscribe_registered_triggers(
         return False  # Signal failure for retry tracking
 
     except Exception as e:
-        _HEALTH_FILE.unlink(missing_ok=True)
+        _mark_unhealthy()
         error_msg = (
             f"Unexpected error during subscription to {url}: {type(e).__name__}: {e}"
         )
