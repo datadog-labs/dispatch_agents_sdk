@@ -20,9 +20,6 @@ RESERVED_ENV_VARS: frozenset[str] = frozenset(
         "DISPATCH_NAMESPACE",
         "DISPATCH_AGENT_NAME",
         "DISPATCH_AGENT_VERSION",
-        "DD_SERVICE",
-        "DD_ENV",
-        "DD_VERSION",
         "MCP_CONFIG_JSON",
         "MCP_GATEWAY_URL",
     }
