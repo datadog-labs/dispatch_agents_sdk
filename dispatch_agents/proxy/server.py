@@ -31,8 +31,12 @@ import httpcore
 import httpx
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
+
+from dispatch_agents.proxy.sse_utils import (
+    StreamingUsageCollector,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -132,8 +136,18 @@ def _is_not_configured_error(status_code: int, body: bytes) -> bool:
             "provider" in lower and "not configured" in lower
         )
     except (json.JSONDecodeError, AttributeError):
-        pass
+        logger.debug("Failed to parse error body in _is_not_configured_error")
     return False
+
+
+def _is_auth_error(status_code: int) -> bool:
+    """Check if a backend response indicates the LLM provider rejected the API key.
+
+    The sidecar authenticates to the backend with DISPATCH_API_KEY, so a
+    401/403 from the proxy endpoint is almost always a provider auth error
+    forwarded by the backend (not Dispatch's own auth rejecting us).
+    """
+    return status_code in (401, 403)
 
 
 def _log_backend_error(status_code: int, body: bytes, provider_format: str) -> None:
@@ -166,6 +180,25 @@ def _log_backend_error(status_code: int, body: bytes, provider_format: str) -> N
     )
 
 
+# Headers that are internal to the sidecar proxy and should NOT be forwarded
+# to the provider.  Everything else the SDK sends gets passed through so that
+# new provider headers (anthropic-beta, openai-beta, etc.) work automatically
+# without sidecar changes.
+_STRIP_HEADERS = {
+    "host",
+    "content-length",
+    "content-type",
+    "transfer-encoding",
+    "connection",
+    "accept",
+    "accept-encoding",
+    "user-agent",
+    "authorization",
+    "x-api-key",
+}
+_STRIP_PREFIXES = ("x-dispatch-",)
+
+
 def _extract_trace_context(
     request: Request,
 ) -> tuple[dict[str, str], str | None, str | None, str | None, dict[str, str] | None]:
@@ -185,6 +218,18 @@ def _extract_trace_context(
             extra_headers = json.loads(extra_headers_json)
         except (json.JSONDecodeError, ValueError):
             logger.debug("Failed to parse X-Dispatch-Extra-Headers, ignoring")
+
+    # Forward all SDK headers except internal/transport ones so that provider
+    # headers (anthropic-version, anthropic-beta, openai-beta, etc.) pass
+    # through automatically without needing an explicit allowlist.
+    for name, value in headers.items():
+        if name in _STRIP_HEADERS:
+            continue
+        if any(name.startswith(p) for p in _STRIP_PREFIXES):
+            continue
+        if extra_headers is None:
+            extra_headers = {}
+        extra_headers.setdefault(name, value)
 
     return headers, trace_id, invocation_id, subprocess_id, extra_headers
 
@@ -233,13 +278,13 @@ async def _call_provider_directly(
                 status_code=401,
             )
 
-    # Build provider-specific headers (extra_headers first, then auth overrides)
+    # Build provider-specific headers (defaults first, then extra_headers override)
+    # Provider-specific headers (anthropic-version, anthropic-beta, etc.)
+    # come from extra_headers, captured from the SDK's original request.
     headers: dict[str, str] = {"Content-Type": "application/json"}
+    headers[config["auth_header"]] = f"{config['auth_prefix']}{api_key}"
     if extra_headers:
         headers.update(extra_headers)
-    headers[config["auth_header"]] = f"{config['auth_prefix']}{api_key}"
-    if provider_format == "anthropic":
-        headers["anthropic-version"] = "2023-06-01"
 
     url = config["base_url"] + (endpoint or _PROVIDER_ENDPOINT.get(provider_format, ""))
 
@@ -278,6 +323,7 @@ async def _call_provider_passthrough(
     method: str,
     body: bytes | None,
     query_string: str,
+    extra_headers: dict[str, str] | None = None,
 ) -> Response:
     """Call the provider directly for passthrough (unsupported) endpoints.
 
@@ -304,13 +350,13 @@ async def _call_provider_passthrough(
     if query_string:
         url += f"?{query_string}"
 
-    # Build headers
+    # Build headers (defaults first, then extra_headers override)
     headers: dict[str, str] = {}
     headers[config["auth_header"]] = f"{config['auth_prefix']}{api_key}"
-    if provider_format == "anthropic":
-        headers["anthropic-version"] = "2023-06-01"
     if body:
         headers["Content-Type"] = "application/json"
+    if extra_headers:
+        headers.update(extra_headers)
 
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
@@ -349,6 +395,7 @@ async def _log_fallback_call(
     try:
         resp_data = json.loads(response_body)
     except (json.JSONDecodeError, ValueError):
+        logger.debug("Failed to parse response body in _log_fallback_call, skipping")
         return
 
     payload: dict[str, Any] = {
@@ -486,11 +533,7 @@ async def _proxy_to_backend(
         return await _proxy_to_backend_streaming(
             backend_payload,
             provider_format,
-            body,
             trace_id,
-            invocation_id,
-            extra_headers,
-            endpoint,
         )
 
     # Non-streaming path — forward to backend and return response
@@ -555,6 +598,41 @@ async def _proxy_to_backend(
             )
         return fallback_resp
 
+    # Detect provider auth error — fall back to agent's own key if available
+    if _is_auth_error(resp.status_code):
+        config = _PROVIDER_CONFIG.get(provider_format)
+        has_own_key = config and os.environ.get(config["key_env"])
+        if has_own_key:
+            logger.warning(
+                "Provider auth failed (HTTP %d), falling back to agent's own %s key",
+                resp.status_code,
+                provider_format,
+            )
+            if trace_id:
+                _fallback_traces.add(trace_id)
+            start = time.monotonic()
+            fallback_resp = await _call_provider_directly(
+                body, provider_format, extra_headers, endpoint
+            )
+            elapsed_ms = int((time.monotonic() - start) * 1000)
+            if fallback_resp.status_code < 400:
+                asyncio.create_task(
+                    _log_fallback_call(
+                        body,
+                        provider_format,
+                        fallback_resp.body,
+                        trace_id,
+                        invocation_id,
+                        elapsed_ms,
+                    )
+                )
+            return fallback_resp
+        logger.warning(
+            "Provider auth failed (HTTP %d) and no fallback %s key available",
+            resp.status_code,
+            provider_format,
+        )
+
     # Surface backend errors clearly in agent logs so developers can debug
     if resp.status_code >= 400:
         _log_backend_error(resp.status_code, resp.content, provider_format)
@@ -574,11 +652,7 @@ async def _proxy_to_backend(
 async def _proxy_to_backend_streaming(
     backend_payload: dict[str, Any],
     provider_format: str,
-    body: dict[str, Any],
     trace_id: str | None,
-    invocation_id: str | None,
-    extra_headers: dict[str, str] | None,
-    endpoint: str | None,
 ) -> Response:
     """Stream SSE from the backend to the SDK caller.
 
@@ -586,7 +660,6 @@ async def _proxy_to_backend_streaming(
     We pipe the bytes through without parsing — the backend handles cost tracking.
     Falls back to direct provider call if backend is unreachable or not configured.
     """
-    from starlette.responses import StreamingResponse
 
     backend_url = _get_backend_proxy_url()
     client = httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0))
@@ -613,6 +686,23 @@ async def _proxy_to_backend_streaming(
                         )
                         if trace_id:
                             _fallback_traces.add(trace_id)
+                    elif _is_auth_error(resp.status_code):
+                        # Provider key rejected — cache trace so next call
+                        # goes direct via _call_provider_directly_streaming
+                        config = _PROVIDER_CONFIG.get(provider_format)
+                        has_fallback = config and os.environ.get(config["key_env"])
+                        if has_fallback and trace_id:
+                            _fallback_traces.add(trace_id)
+                        logger.warning(
+                            "Provider auth failed (HTTP %d)%s",
+                            resp.status_code,
+                            ", will fall back on next call"
+                            if has_fallback
+                            else f", no fallback {provider_format} key available",
+                        )
+                        _log_backend_error(
+                            resp.status_code, error_body, provider_format
+                        )
                     else:
                         # Surface non-config backend errors in agent logs
                         _log_backend_error(
@@ -665,7 +755,6 @@ async def _call_provider_directly_streaming(
     Uses raw httpx streaming (not litellm) since litellm is not available in the SDK.
     Buffers SSE events for usage extraction and logs to /llm/log after stream completes.
     """
-    from starlette.responses import StreamingResponse
 
     config = _PROVIDER_CONFIG.get(provider_format)
     if not config:
@@ -696,13 +785,12 @@ async def _call_provider_directly_streaming(
         )
 
     headers: dict[str, str] = {"Content-Type": "application/json"}
-    if extra_headers:
-        headers.update(extra_headers)
     if provider_format == "anthropic":
         headers["x-api-key"] = api_key
-        headers["anthropic-version"] = "2023-06-01"
     else:
         headers["Authorization"] = f"Bearer {api_key}"
+    if extra_headers:
+        headers.update(extra_headers)
 
     url = config["base_url"] + (endpoint or _PROVIDER_ENDPOINT.get(provider_format, ""))
     client = httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0))
@@ -755,9 +843,6 @@ async def _log_fallback_streaming_call(
     latency_ms: int,
 ) -> None:
     """Fire-and-forget: extract usage from buffered SSE lines and log to backend."""
-    from dispatch_agents.proxy.sse_utils import (
-        StreamingUsageCollector,
-    )
 
     try:
         # Parse the buffered SSE lines into events
@@ -830,8 +915,7 @@ async def _proxy_passthrough(request: Request, provider_format: str) -> Response
         try:
             body_dict = json.loads(raw_body)
         except (json.JSONDecodeError, ValueError):
-            # Non-JSON body — pass as-is via the passthrough
-            pass
+            logger.debug("Non-JSON body in passthrough request, forwarding as-is")
 
     _, trace_id, invocation_id, subprocess_id, extra_headers = _extract_trace_context(
         request
@@ -840,7 +924,12 @@ async def _proxy_passthrough(request: Request, provider_format: str) -> Response
     # Check fallback cache
     if trace_id and trace_id in _fallback_traces:
         return await _call_provider_passthrough(
-            provider_format, path, method, raw_body if raw_body else None, query_string
+            provider_format,
+            path,
+            method,
+            raw_body if raw_body else None,
+            query_string,
+            extra_headers=extra_headers,
         )
 
     # Build passthrough request for backend
@@ -885,7 +974,12 @@ async def _proxy_passthrough(request: Request, provider_format: str) -> Response
             provider_format,
         )
         return await _call_provider_passthrough(
-            provider_format, path, method, raw_body if raw_body else None, query_string
+            provider_format,
+            path,
+            method,
+            raw_body if raw_body else None,
+            query_string,
+            extra_headers=extra_headers,
         )
 
     # Detect "not configured" and fall back to direct provider call
@@ -897,7 +991,37 @@ async def _proxy_passthrough(request: Request, provider_format: str) -> Response
         if trace_id:
             _fallback_traces.add(trace_id)
         return await _call_provider_passthrough(
-            provider_format, path, method, raw_body if raw_body else None, query_string
+            provider_format,
+            path,
+            method,
+            raw_body if raw_body else None,
+            query_string,
+            extra_headers=extra_headers,
+        )
+
+    # Detect provider auth error — fall back to agent's own key if available
+    if _is_auth_error(resp.status_code):
+        config = _PROVIDER_CONFIG.get(provider_format)
+        if config and os.environ.get(config["key_env"]):
+            logger.warning(
+                "Provider auth failed (HTTP %d), falling back to agent's own %s key for passthrough",
+                resp.status_code,
+                provider_format,
+            )
+            if trace_id:
+                _fallback_traces.add(trace_id)
+            return await _call_provider_passthrough(
+                provider_format,
+                path,
+                method,
+                raw_body if raw_body else None,
+                query_string,
+                extra_headers=extra_headers,
+            )
+        logger.warning(
+            "Provider auth failed (HTTP %d) and no fallback %s key for passthrough",
+            resp.status_code,
+            provider_format,
         )
 
     # Return the raw response from backend (which is the raw provider response)
