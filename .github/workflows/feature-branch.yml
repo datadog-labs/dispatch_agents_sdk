@@ -14,46 +14,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint:
-    name: Lint & Format
+  version_policy:
+    name: Version Policy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - name: Install dev dependencies
-        run: uv sync --group dev
-      - name: Lint
-        run: uv run ruff check .
-      - name: Format check
-        run: uv run ruff format --check .
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+      - name: Enforce version policy
+        run: python3 scripts/ci/version_policy.py --mode feature-branch
 
-  typecheck:
-    name: Type Check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - name: Install dev dependencies
-        run: uv sync --group dev
-      - name: mypy
-        run: uv run mypy dispatch_agents
-
-  test:
-    name: Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - name: Install dev dependencies
-        run: uv sync --group dev
-      - name: pytest
-        run: uv run pytest --cov=dispatch_agents --cov-report=term-missing --ignore=examples
-
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - name: Build wheel and sdist
-        run: uv build
+  ci:
+    name: CI
+    needs: version_policy
+    uses: ./.github/workflows/ci-reusable.yml
