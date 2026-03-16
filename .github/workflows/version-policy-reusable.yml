@@ -1,0 +1,50 @@
+name: Reusable Version Policy
+
+on:
+  workflow_call:
+    inputs:
+      ignored_paths_json:
+        description: JSON array of exact paths ignored by release-scope classification.
+        required: false
+        type: string
+        default: '["README.md","CONTRIBUTING.md","NOTICE","uv.lock","pyproject.toml"]'
+      ignored_prefixes_json:
+        description: JSON array of path prefixes ignored by release-scope classification.
+        required: false
+        type: string
+        default: '[".github/","tests/","examples/","plugins/","LICENSE"]'
+    outputs:
+      current_tag:
+        description: The current repository tag derived from pyproject version.
+        value: ${{ jobs.version_policy.outputs.current_tag }}
+      should_release:
+        description: Whether the current main commit should produce a release.
+        value: ${{ jobs.version_policy.outputs.should_release }}
+
+jobs:
+  version_policy:
+    name: Version Policy
+    runs-on: ubuntu-latest
+    outputs:
+      current_tag: ${{ steps.version_policy.outputs.current_tag }}
+      should_release: ${{ steps.version_policy.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+      - name: Classify release-relevant changes
+        id: change_scope
+        run: >
+          uv run python .github/scripts/change_scope.py
+          --ref-name "${{ github.ref_name }}"
+          --ignored-paths-json '${{ inputs.ignored_paths_json }}'
+          --ignored-prefixes-json '${{ inputs.ignored_prefixes_json }}'
+      - name: Install dev dependencies
+        run: uv sync --group dev
+      - name: Enforce version policy
+        id: version_policy
+        run: >
+          uv run python .github/scripts/version_policy.py
+          --source-changed "${{ steps.change_scope.outputs.source_changed }}"
+          --pyproject-baseline-ref "${{ steps.change_scope.outputs.pyproject_baseline_ref }}"
