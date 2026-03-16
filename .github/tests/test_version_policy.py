@@ -9,7 +9,9 @@ from pathlib import Path
 
 import pytest
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "ci" / "version_policy.py"
+MODULE_PATH = (
+    Path(__file__).resolve().parents[2] / ".github" / "scripts" / "version_policy.py"
+)
 MODULE_NAME = "dispatch_agents_ci_version_policy"
 
 spec = importlib.util.spec_from_file_location(MODULE_NAME, MODULE_PATH)
