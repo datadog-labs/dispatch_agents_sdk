@@ -53,7 +53,7 @@ dispatch agent init <agent-name> --description "<what the agent does>"
 
 This creates a directory with:
 - `agent.py` — the main entrypoint with handler functions
-- `.dispatch.yaml` — deployment configuration
+- `dispatch.yaml` — deployment configuration
 - `pyproject.toml` — Python dependencies
 - `requirements.txt` — pinned dependencies (auto-generated)
 
@@ -156,7 +156,7 @@ uv add httpx  # or any pip-installable package
 
 ### System packages
 
-For OS-level packages (e.g., `ffmpeg`, `git`), add them in `.dispatch.yaml`:
+For OS-level packages (e.g., `ffmpeg`, `git`), add them in `dispatch.yaml`:
 
 ```yaml
 system_packages:
@@ -166,7 +166,7 @@ system_packages:
 
 ### Secrets
 
-To inject secrets as environment variables, add them in `.dispatch.yaml`:
+To inject secrets as environment variables, add them in `dispatch.yaml`:
 
 ```yaml
 secrets:
@@ -226,7 +226,7 @@ await memory.short_term.delete(session_id="sess-123")
 
 ## Step 5: Use Persistent Storage (Optional)
 
-For file-based persistence, configure a volume in `.dispatch.yaml`:
+For file-based persistence, configure a volume in `dispatch.yaml`:
 
 ```yaml
 volumes:
@@ -359,7 +359,7 @@ All payload fields must match the `BasePayload` subclass definition exactly. `Ba
 
 ### Import errors on deploy
 
-Make sure all Python dependencies are in `pyproject.toml` (use `uv add <package>`). System packages go in `.dispatch.yaml` under `system_packages`.
+Make sure all Python dependencies are in `pyproject.toml` (use `uv add <package>`). System packages go in `dispatch.yaml` under `system_packages`.
 
 ### Handler not found on invoke
 
@@ -406,7 +406,7 @@ async def handle_task(payload: TaskPayload) -> None:
     await emit_event("tasks.processed", {"task_id": payload.task_id, "status": "done"})
 ```
 
-With `.dispatch.yaml`:
+With `dispatch.yaml`:
 
 ```yaml
 namespace: my-namespace

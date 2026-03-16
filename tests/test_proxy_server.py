@@ -23,6 +23,7 @@ from dispatch_agents.proxy.server import (
     _get_auth_headers,
     _get_backend_log_url,
     _get_backend_passthrough_url,
+    _is_auth_error,
     _is_not_configured_error,
     _log_fallback_call,
     create_app,
@@ -544,6 +545,7 @@ class TestFallbackBehavior:
                 "messages": [{"role": "user", "content": "Hi"}],
                 "max_tokens": 1024,
             },
+            headers={"anthropic-version": "2023-06-01"},
         )
 
         assert resp.status_code == 200
@@ -558,6 +560,7 @@ class TestFallbackBehavior:
         assert "api.anthropic.com" in str(second_call_url)
         second_call_headers = calls[1].kwargs.get("headers", {})
         assert second_call_headers.get("x-api-key") == "sk-ant-test-key-123"
+        # anthropic-version is passed through from SDK request headers
         assert second_call_headers.get("anthropic-version") == "2023-06-01"
         # Should NOT have Authorization header for Anthropic
         assert "Authorization" not in second_call_headers
@@ -1067,3 +1070,167 @@ class TestPassthroughRoute:
 
         resp = client.get("/anthropic/v1/models")
         assert resp.status_code == 200
+
+
+# ── Auth Error Detection ─────────────────────────────────────────────
+
+
+class TestIsAuthError:
+    def test_401_is_auth_error(self):
+        assert _is_auth_error(401) is True
+
+    def test_403_is_auth_error(self):
+        assert _is_auth_error(403) is True
+
+    def test_400_is_not_auth_error(self):
+        assert _is_auth_error(400) is False
+
+    def test_500_is_not_auth_error(self):
+        assert _is_auth_error(500) is False
+
+    def test_200_is_not_auth_error(self):
+        assert _is_auth_error(200) is False
+
+
+# ── Auth Error Fallback (non-streaming) ──────────────────────────────
+
+# Backend 401 error in SDK format
+AUTH_ERROR_RESPONSE = {
+    "error": {
+        "message": "LLM call failed: Authentication failed",
+        "type": "auth_error",
+        "code": "401",
+    }
+}
+
+
+def _make_mock_client_with_headers(
+    response_data,
+    status_code,
+    headers=None,
+):
+    """Create a mock client whose response includes headers."""
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    mock_response = MagicMock()
+    mock_response.status_code = status_code
+    mock_response.content = json.dumps(response_data).encode()
+    mock_response.json.return_value = response_data
+    mock_response.text = json.dumps(response_data)
+    mock_response.headers = httpx.Headers(headers or {})
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    return mock_client
+
+
+class TestAuthErrorFallback:
+    """Test that the sidecar falls back to the agent's own key on auth errors."""
+
+    def _make_fallback_response(self, data=None):
+        """Create a real Response object for _call_provider_directly mock."""
+        from starlette.responses import Response
+
+        return Response(
+            content=json.dumps(data or MOCK_OPENAI_RESPONSE).encode(),
+            status_code=200,
+            media_type="application/json",
+        )
+
+    @patch.dict(os.environ, {"_DISPATCH_ORIGINAL_OPENAI_API_KEY": "sk-agent-key"})
+    @patch("dispatch_agents.proxy.server._call_provider_directly")
+    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    def test_falls_back_on_401(self, mock_client_cls, mock_direct_call, client):
+        """Backend returns 401 → sidecar should fall back to agent's own key."""
+        mock_client_cls.return_value = _make_mock_client_with_headers(
+            AUTH_ERROR_RESPONSE, 401
+        )
+        mock_direct_call.return_value = self._make_fallback_response()
+
+        resp = client.post(
+            OPENAI_CHAT_ROUTE,
+            json={"model": "gpt-4o", "messages": [{"role": "user", "content": "Hi"}]},
+        )
+
+        mock_direct_call.assert_called_once()
+        assert resp.status_code == 200
+
+    @patch.dict(os.environ, {"_DISPATCH_ORIGINAL_OPENAI_API_KEY": "sk-agent-key"})
+    @patch("dispatch_agents.proxy.server._call_provider_directly")
+    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    def test_fallback_adds_trace_to_cache(
+        self, mock_client_cls, mock_direct_call, client
+    ):
+        """After auth error fallback, the trace_id should be cached for future calls."""
+        mock_client_cls.return_value = _make_mock_client_with_headers(
+            AUTH_ERROR_RESPONSE, 401
+        )
+        mock_direct_call.return_value = self._make_fallback_response()
+
+        resp = client.post(
+            OPENAI_CHAT_ROUTE,
+            json={"model": "gpt-4o", "messages": [{"role": "user", "content": "Hi"}]},
+            headers={"X-Dispatch-Trace-Id": "trace-abc"},
+        )
+
+        assert resp.status_code == 200
+        assert "trace-abc" in _fallback_traces
+
+    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    def test_no_fallback_without_agent_key(self, mock_client_cls, client):
+        """Without an agent key, auth errors should be returned as-is."""
+        mock_client_cls.return_value = _make_mock_client_with_headers(
+            AUTH_ERROR_RESPONSE, 401
+        )
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("_DISPATCH_ORIGINAL_OPENAI_API_KEY", None)
+
+            resp = client.post(
+                OPENAI_CHAT_ROUTE,
+                json={
+                    "model": "gpt-4o",
+                    "messages": [{"role": "user", "content": "Hi"}],
+                },
+            )
+
+        assert resp.status_code == 401
+
+    @patch.dict(os.environ, {"_DISPATCH_ORIGINAL_OPENAI_API_KEY": "sk-agent-key"})
+    @patch("dispatch_agents.proxy.server._call_provider_directly")
+    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    def test_falls_back_on_403(self, mock_client_cls, mock_direct_call, client):
+        """403 (forbidden) should also trigger fallback."""
+        error_403 = {
+            "error": {"message": "Forbidden", "type": "auth_error", "code": "403"}
+        }
+        mock_client_cls.return_value = _make_mock_client_with_headers(error_403, 403)
+        mock_direct_call.return_value = self._make_fallback_response()
+
+        resp = client.post(
+            OPENAI_CHAT_ROUTE,
+            json={"model": "gpt-4o", "messages": [{"role": "user", "content": "Hi"}]},
+        )
+
+        mock_direct_call.assert_called_once()
+        assert resp.status_code == 200
+
+    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    def test_500_does_not_trigger_fallback(self, mock_client_cls, client):
+        """500 errors should NOT trigger auth fallback."""
+        error_500 = {"error": {"message": "Internal error", "type": "server_error"}}
+        mock_client_cls.return_value = _make_mock_client_with_headers(error_500, 500)
+
+        with patch.dict(
+            os.environ, {"_DISPATCH_ORIGINAL_OPENAI_API_KEY": "sk-agent-key"}
+        ):
+            resp = client.post(
+                OPENAI_CHAT_ROUTE,
+                json={
+                    "model": "gpt-4o",
+                    "messages": [{"role": "user", "content": "Hi"}],
+                },
+            )
+
+        assert resp.status_code == 500

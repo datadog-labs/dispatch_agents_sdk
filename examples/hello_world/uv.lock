@@ -181,7 +181,7 @@ wheels = [
 
 [[package]]
 name = "dispatch-agents"
-version = "0.7.2"
+version = "0.7.3"
 source = { directory = "../../sdk" }
 dependencies = [
     { name = "aiohttp" },
