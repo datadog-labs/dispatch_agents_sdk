@@ -80,9 +80,7 @@ def is_relevant_pyproject_change(
     current_project.pop("version", None)
     baseline_project.pop("version", None)
 
-    current_hatch = (
-        current_pyproject.get("tool", {}).get("hatch", {}).get("build", {})
-    )
+    current_hatch = current_pyproject.get("tool", {}).get("hatch", {}).get("build", {})
     baseline_hatch = (
         baseline_pyproject.get("tool", {}).get("hatch", {}).get("build", {})
     )
@@ -127,7 +125,9 @@ def evaluate_policy(
     current_version = current_pyproject["project"]["version"]
     current_tag = f"v{current_version}"
     baseline_tag = latest_tag or "v0.0.0"
-    relevant_change = is_relevant_pyproject_change(current_pyproject, baseline_pyproject)
+    relevant_change = is_relevant_pyproject_change(
+        current_pyproject, baseline_pyproject
+    )
     changed_files = list(changed_files)
     unknown_paths = tuple(
         path
