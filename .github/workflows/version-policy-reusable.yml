@@ -26,9 +26,16 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 0
+      - name: Classify release-relevant changes
+        id: change_scope
+        run: python .github/scripts/change_scope.py --mode "${{ inputs.mode }}"
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
       - name: Install dev dependencies
         run: uv sync --group dev
       - name: Enforce version policy
         id: version_policy
-        run: uv run python .github/scripts/version_policy.py --mode "${{ inputs.mode }}"
+        run: >
+          uv run python .github/scripts/version_policy.py
+          --mode "${{ inputs.mode }}"
+          --source-changed "${{ steps.change_scope.outputs.source_changed }}"
+          --pyproject-baseline-ref "${{ steps.change_scope.outputs.pyproject_baseline_ref }}"

@@ -17,26 +17,17 @@ from typing import Any
 SEMVER_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 SEMVER_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
-SHIPPED_PATH_PREFIXES = ("dispatch_agents/", "agentservice/")
-IGNORED_PATH_PREFIXES = ("tests/", "examples/", ".github/", "plugins/")
-IGNORED_PATHS = {
-    "README.md",
-    "CONTRIBUTING.md",
-    "NOTICE",
-    "uv.lock",
-}
-
 
 @dataclass(frozen=True)
 class PolicyResult:
     current_version: str
     current_tag: str
     latest_tag: str
+    source_changed: bool
     requires_version_bump: bool
     has_version_bump: bool
     should_release: bool
     relevant_pyproject_changed: bool
-    unknown_paths: tuple[str, ...]
     failure_reason: str | None
 
 
@@ -93,31 +84,9 @@ def is_relevant_pyproject_change(
     )
 
 
-def is_shipped_path(path: str) -> bool:
-    return path.startswith(SHIPPED_PATH_PREFIXES)
-
-
-def is_ignored_path(path: str) -> bool:
-    if path in IGNORED_PATHS:
-        return True
-    if path.startswith("LICENSE"):
-        return True
-    return path.startswith(IGNORED_PATH_PREFIXES)
-
-
-def requires_version_bump(
-    changed_files: Iterable[str],
-    relevant_pyproject_changed: bool,
-    unknown_paths: Iterable[str],
-) -> bool:
-    if relevant_pyproject_changed:
-        return True
-    return any(is_shipped_path(path) for path in changed_files) or any(unknown_paths)
-
-
 def evaluate_policy(
     *,
-    changed_files: Iterable[str],
+    source_changed: bool,
     current_pyproject: dict[str, Any],
     baseline_pyproject: dict[str, Any] | None,
     latest_tag: str | None,
@@ -128,19 +97,7 @@ def evaluate_policy(
     relevant_change = is_relevant_pyproject_change(
         current_pyproject, baseline_pyproject
     )
-    changed_files = list(changed_files)
-    unknown_paths = tuple(
-        path
-        for path in changed_files
-        if not is_ignored_path(path)
-        and not is_shipped_path(path)
-        and path != "pyproject.toml"
-    )
-    bump_required = requires_version_bump(
-        changed_files,
-        relevant_change,
-        unknown_paths,
-    )
+    bump_required = source_changed or relevant_change
 
     has_bump = compare_versions(current_version, baseline_tag) > 0
     comparison = compare_versions(current_version, baseline_tag)
@@ -160,11 +117,11 @@ def evaluate_policy(
         current_version=current_version,
         current_tag=current_tag,
         latest_tag=baseline_tag,
+        source_changed=source_changed,
         requires_version_bump=bump_required,
         has_version_bump=has_bump,
         should_release=has_bump,
         relevant_pyproject_changed=relevant_change,
-        unknown_paths=unknown_paths,
         failure_reason=failure_reason,
     )
 
@@ -195,19 +152,6 @@ def get_latest_tag() -> str | None:
     if not valid_tags:
         return None
     return valid_tags[-1]
-
-
-def get_changed_files(latest_tag: str | None) -> list[str]:
-    if latest_tag is None:
-        output = run_git("ls-files")
-    else:
-        output = run_git(
-            "diff",
-            "--name-only",
-            "--diff-filter=ACDMRTUXB",
-            f"{latest_tag}...HEAD",
-        )
-    return [line.strip() for line in output.splitlines() if line.strip()]
 
 
 def load_pyproject(path: Path) -> dict[str, Any]:
@@ -259,6 +203,17 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="Execution mode for workflow messaging.",
     )
+    parser.add_argument(
+        "--source-changed",
+        choices=("true", "false"),
+        required=True,
+        help="Whether the workflow determined that release-relevant non-pyproject files changed.",
+    )
+    parser.add_argument(
+        "--pyproject-baseline-ref",
+        default="",
+        help="Git ref to use as the pyproject.toml comparison baseline. Defaults to the latest release tag when omitted.",
+    )
     return parser.parse_args()
 
 
@@ -268,12 +223,13 @@ def main() -> int:
     fetch_tags()
 
     latest_tag = get_latest_tag()
-    changed_files = get_changed_files(latest_tag)
     current_pyproject = load_pyproject(repo_root / "pyproject.toml")
-    baseline_pyproject = load_pyproject_from_ref(latest_tag, repo_root)
+    pyproject_baseline_ref = args.pyproject_baseline_ref or latest_tag
+    baseline_pyproject = load_pyproject_from_ref(pyproject_baseline_ref, repo_root)
+    source_changed = args.source_changed == "true"
 
     result = evaluate_policy(
-        changed_files=changed_files,
+        source_changed=source_changed,
         current_pyproject=current_pyproject,
         baseline_pyproject=baseline_pyproject,
         latest_tag=latest_tag,
@@ -284,13 +240,10 @@ def main() -> int:
     print(f"Version policy check ({mode_label})")
     print(f"  latest tag: {result.latest_tag}")
     print(f"  current tag: {result.current_tag}")
+    print(f"  pyproject baseline: {pyproject_baseline_ref or '(none)'}")
+    print(f"  source changed: {str(result.source_changed).lower()}")
     print(f"  requires bump: {str(result.requires_version_bump).lower()}")
     print(f"  should release: {str(result.should_release).lower()}")
-
-    if result.unknown_paths:
-        print("  unknown paths conservatively treated as release-relevant:")
-        for path in result.unknown_paths:
-            print(f"    - {path}")
 
     if result.failure_reason:
         print(result.failure_reason, file=sys.stderr)

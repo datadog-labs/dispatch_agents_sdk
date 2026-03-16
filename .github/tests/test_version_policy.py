@@ -61,7 +61,7 @@ def pyproject(
 
 def test_sdk_change_requires_bump_when_version_is_unchanged():
     result = version_policy.evaluate_policy(
-        changed_files=["dispatch_agents/instrument.py"],
+        source_changed=True,
         current_pyproject=pyproject(version="0.7.3"),
         baseline_pyproject=pyproject(version="0.7.2"),
         latest_tag="v0.7.3",
@@ -74,7 +74,7 @@ def test_sdk_change_requires_bump_when_version_is_unchanged():
 
 def test_sdk_change_passes_with_higher_version():
     result = version_policy.evaluate_policy(
-        changed_files=["dispatch_agents/instrument.py"],
+        source_changed=True,
         current_pyproject=pyproject(version="0.7.4"),
         baseline_pyproject=pyproject(version="0.7.3"),
         latest_tag="v0.7.3",
@@ -88,7 +88,7 @@ def test_sdk_change_passes_with_higher_version():
 
 def test_docs_only_change_does_not_require_bump():
     result = version_policy.evaluate_policy(
-        changed_files=["README.md", ".github/workflows/feature-branch.yml"],
+        source_changed=False,
         current_pyproject=pyproject(version="0.7.3"),
         baseline_pyproject=pyproject(version="0.7.3"),
         latest_tag="v0.7.3",
@@ -102,7 +102,7 @@ def test_docs_only_change_does_not_require_bump():
 
 def test_relevant_pyproject_change_requires_bump():
     result = version_policy.evaluate_policy(
-        changed_files=["pyproject.toml"],
+        source_changed=False,
         current_pyproject=pyproject(version="0.7.3", description="Updated SDK"),
         baseline_pyproject=pyproject(version="0.7.2"),
         latest_tag="v0.7.3",
@@ -115,7 +115,7 @@ def test_relevant_pyproject_change_requires_bump():
 
 def test_dev_tooling_pyproject_change_does_not_require_bump():
     result = version_policy.evaluate_policy(
-        changed_files=["pyproject.toml"],
+        source_changed=False,
         current_pyproject=pyproject(
             version="0.7.3",
             dev_dependencies=["pytest>=8.4.2", "ruff>=0.14.1"],
@@ -131,7 +131,7 @@ def test_dev_tooling_pyproject_change_does_not_require_bump():
 
 def test_lower_than_latest_release_fails_even_for_docs_change():
     result = version_policy.evaluate_policy(
-        changed_files=["README.md"],
+        source_changed=False,
         current_pyproject=pyproject(version="0.7.2"),
         baseline_pyproject=pyproject(version="0.7.3"),
         latest_tag="v0.7.3",
@@ -144,7 +144,7 @@ def test_lower_than_latest_release_fails_even_for_docs_change():
 
 def test_no_tag_baseline_allows_initial_version():
     result = version_policy.evaluate_policy(
-        changed_files=["dispatch_agents/instrument.py"],
+        source_changed=True,
         current_pyproject=pyproject(version="0.1.0"),
         baseline_pyproject=None,
         latest_tag=None,
@@ -156,15 +156,14 @@ def test_no_tag_baseline_allows_initial_version():
     assert result.failure_reason is None
 
 
-def test_unknown_top_level_path_requires_bump():
+def test_workflow_classified_release_relevant_change_requires_bump():
     result = version_policy.evaluate_policy(
-        changed_files=["new_surface/config.json"],
+        source_changed=True,
         current_pyproject=pyproject(version="0.7.3"),
         baseline_pyproject=pyproject(version="0.7.2"),
         latest_tag="v0.7.3",
     )
 
-    assert result.unknown_paths == ("new_surface/config.json",)
     assert result.requires_version_bump is True
     assert result.failure_reason is not None
 
