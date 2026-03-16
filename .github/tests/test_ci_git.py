@@ -98,7 +98,13 @@ def test_fetch_main_branch_ref_raises_on_failure(monkeypatch):
     def fake_run(*args, **kwargs):
         raise subprocess.CalledProcessError(
             returncode=1,
-            cmd=["git", "fetch", "--no-tags", "origin", "main:refs/remotes/origin/main"],
+            cmd=[
+                "git",
+                "fetch",
+                "--no-tags",
+                "origin",
+                "main:refs/remotes/origin/main",
+            ],
         )
 
     monkeypatch.setattr(ci_git.subprocess, "run", fake_run)

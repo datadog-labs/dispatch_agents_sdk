@@ -37,6 +37,7 @@ def parse_version(version: str) -> tuple[int, int, int]:
         raise ValueError(f"Unsupported version format: {version}")
     return tuple(int(part) for part in match.groups())
 
+
 def compare_versions(current_version: str, latest_tag: str) -> int:
     current = parse_version(current_version)
     latest = parse_tag(latest_tag)
@@ -111,6 +112,7 @@ def evaluate_policy(
         relevant_pyproject_changed=relevant_change,
         failure_reason=failure_reason,
     )
+
 
 def load_pyproject(path: Path) -> dict[str, Any]:
     with path.open("rb") as file_obj:

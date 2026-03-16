@@ -29,7 +29,9 @@ class ChangeScopeResult:
 
 def parse_json_string_list(value: str) -> list[str]:
     parsed = json.loads(value)
-    if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
+    if not isinstance(parsed, list) or not all(
+        isinstance(item, str) for item in parsed
+    ):
         raise ValueError("expected a JSON array of strings")
     return parsed
 
@@ -72,7 +74,9 @@ def determine_change_scope(
 ) -> ChangeScopeResult:
     if ref_name != "main":
         if feature_branch_base_ref is None:
-            raise ValueError("feature_branch_base_ref is required for feature-branch mode")
+            raise ValueError(
+                "feature_branch_base_ref is required for feature-branch mode"
+            )
         return ChangeScopeResult(
             ref_name=ref_name,
             range_label=f"{feature_branch_base_ref}...HEAD",
@@ -85,7 +89,9 @@ def determine_change_scope(
             ),
         )
 
-    range_label = f"{latest_tag}...HEAD" if latest_tag is not None else "tracked files in HEAD"
+    range_label = (
+        f"{latest_tag}...HEAD" if latest_tag is not None else "tracked files in HEAD"
+    )
     return ChangeScopeResult(
         ref_name=ref_name,
         range_label=range_label,

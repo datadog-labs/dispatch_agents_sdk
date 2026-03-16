@@ -8,7 +8,9 @@ from pathlib import Path
 
 import pytest
 
-MODULE_PATH = Path(__file__).resolve().parents[2] / ".github" / "scripts" / "change_scope.py"
+MODULE_PATH = (
+    Path(__file__).resolve().parents[2] / ".github" / "scripts" / "change_scope.py"
+)
 MODULE_NAME = "dispatch_agents_ci_change_scope"
 sys.path.insert(0, str(MODULE_PATH.parent))
 
