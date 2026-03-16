@@ -3,7 +3,7 @@
 import asyncio
 
 import dispatch_agents
-from dispatch_agents import BasePayload, on
+from dispatch_agents import BasePayload, fn, on
 from dispatch_agents.integrations.github import PullRequestReviewCommentCreated
 from pydantic import Field, PositiveInt
 
@@ -91,3 +91,22 @@ async def on_pr_review_comment(
         user=event.comment.user.login,
         comment=event.comment.body,
     )
+
+
+class ReverseRequest(BasePayload):
+    """Input for the reverse function."""
+
+    text: str = Field(description="Text to reverse")
+
+
+class ReverseResponse(BasePayload):
+    """Output of the reverse function."""
+
+    reversed_text: str = Field(description="The reversed text")
+
+
+@fn()
+async def reverse(payload: ReverseRequest) -> ReverseResponse:
+    """Reverse the provided text string."""
+    print(f"Reversing: {payload.text!r}")
+    return ReverseResponse(reversed_text=payload.text[::-1])

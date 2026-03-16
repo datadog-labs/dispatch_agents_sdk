@@ -109,10 +109,11 @@ def _get_auth_headers() -> dict[str, str]:
 
 
 def _is_not_configured_error(status_code: int, body: bytes) -> bool:
-    """Check if a backend response indicates no LLM provider is configured.
+    """Check if a backend response indicates no usable LLM provider.
 
-    Only matches the specific "not configured" 400 error from the backend,
-    not other 400 errors (budget exceeded, invalid request, etc.).
+    Matches "not configured", "disabled", or "no providers" errors — cases
+    where the sidecar should fall back to the agent's own API key.
+    Does NOT match other 400 errors (budget exceeded, invalid request, etc.).
 
     The backend /llm/proxy endpoint returns errors in SDK format:
       OpenAI:    {"error": {"message": "No LLM providers configured..."}}
@@ -132,8 +133,11 @@ def _is_not_configured_error(status_code: int, body: bytes) -> bool:
         if not message:
             return False
         lower = message.lower()
-        return "no llm providers configured" in lower or (
-            "provider" in lower and "not configured" in lower
+        return (
+            "no llm providers configured" in lower
+            or "not configured" in lower
+            or "no provider configured" in lower
+            or "is disabled" in lower
         )
     except (json.JSONDecodeError, AttributeError):
         logger.debug("Failed to parse error body in _is_not_configured_error")
@@ -289,7 +293,9 @@ async def _call_provider_directly(
     url = config["base_url"] + (endpoint or _PROVIDER_ENDPOINT.get(provider_format, ""))
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(
+            timeout=600.0
+        ) as client:  # 10min — matches ALB idle timeout for long-context LLM calls
             resp = await client.post(url, json=body, headers=headers)
         return Response(
             content=resp.content,
@@ -359,7 +365,9 @@ async def _call_provider_passthrough(
         headers.update(extra_headers)
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(
+            timeout=600.0
+        ) as client:  # 10min — matches ALB idle timeout for long-context LLM calls
             resp = await client.request(
                 method=method,
                 url=url,
@@ -507,9 +515,9 @@ async def _proxy_to_backend(
             )
         return fallback_resp
 
-    # Build the backend proxy request — wrap raw SDK body with metadata
+    # Build the backend proxy request — wrap raw SDK body with metadata.
+    # provider_format is no longer sent; the backend derives it from endpoint.
     backend_payload: dict[str, Any] = {
-        "provider_format": provider_format,
         "body": body,
         "endpoint": endpoint,
     }
@@ -539,7 +547,9 @@ async def _proxy_to_backend(
     # Non-streaming path — forward to backend and return response
     backend_url = _get_backend_proxy_url()
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(
+            timeout=600.0
+        ) as client:  # 10min — matches ALB idle timeout for long-context LLM calls
             resp = await client.post(
                 backend_url,
                 json=backend_payload,
@@ -662,7 +672,9 @@ async def _proxy_to_backend_streaming(
     """
 
     backend_url = _get_backend_proxy_url()
-    client = httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0))
+    client = httpx.AsyncClient(
+        timeout=httpx.Timeout(600.0, connect=10.0)
+    )  # 10min — matches ALB idle timeout for long-context LLM calls
 
     async def stream_from_backend():
         try:
@@ -793,7 +805,9 @@ async def _call_provider_directly_streaming(
         headers.update(extra_headers)
 
     url = config["base_url"] + (endpoint or _PROVIDER_ENDPOINT.get(provider_format, ""))
-    client = httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0))
+    client = httpx.AsyncClient(
+        timeout=httpx.Timeout(600.0, connect=10.0)
+    )  # 10min — matches ALB idle timeout for long-context LLM calls
 
     buffered_lines: list[str] = []
     start_time = time.monotonic()
@@ -932,9 +946,9 @@ async def _proxy_passthrough(request: Request, provider_format: str) -> Response
             extra_headers=extra_headers,
         )
 
-    # Build passthrough request for backend
+    # Build passthrough request for backend.
+    # provider_format is no longer sent; the backend derives it from path.
     backend_payload: dict[str, Any] = {
-        "provider_format": provider_format,
         "path": path,
         "method": method,
     }
@@ -961,7 +975,9 @@ async def _proxy_passthrough(request: Request, provider_format: str) -> Response
 
     backend_url = _get_backend_passthrough_url()
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(
+            timeout=600.0
+        ) as client:  # 10min — matches ALB idle timeout for long-context LLM calls
             resp = await client.post(
                 backend_url,
                 json=backend_payload,
