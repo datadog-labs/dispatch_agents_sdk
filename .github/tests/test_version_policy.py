@@ -13,6 +13,7 @@ MODULE_PATH = (
     Path(__file__).resolve().parents[2] / ".github" / "scripts" / "version_policy.py"
 )
 MODULE_NAME = "dispatch_agents_ci_version_policy"
+sys.path.insert(0, str(MODULE_PATH.parent))
 
 spec = importlib.util.spec_from_file_location(MODULE_NAME, MODULE_PATH)
 assert spec is not None
@@ -175,7 +176,7 @@ def test_fetch_tags_raises_on_failure(monkeypatch):
             cmd=["git", "fetch", "--force", "--tags", "origin"],
         )
 
-    monkeypatch.setattr(version_policy.subprocess, "run", fake_run)
+    monkeypatch.setattr(version_policy, "fetch_tags", fake_run)
 
     with pytest.raises(subprocess.CalledProcessError):
         version_policy.fetch_tags()

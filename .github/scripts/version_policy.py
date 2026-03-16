@@ -9,13 +9,13 @@ import re
 import subprocess
 import sys
 import tomllib
-from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SEMVER_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 SEMVER_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+
+from ci_git import fetch_tags, get_latest_tag, parse_tag
 
 
 @dataclass(frozen=True)
@@ -36,19 +36,6 @@ def parse_version(version: str) -> tuple[int, int, int]:
     if not match:
         raise ValueError(f"Unsupported version format: {version}")
     return tuple(int(part) for part in match.groups())
-
-
-def parse_tag(tag: str) -> tuple[int, int, int]:
-    match = SEMVER_TAG_RE.fullmatch(tag)
-    if not match:
-        raise ValueError(f"Unsupported tag format: {tag}")
-    return tuple(int(part) for part in match.groups())
-
-
-def filter_semver_tags(tags: Iterable[str]) -> list[str]:
-    valid_tags = [tag for tag in tags if SEMVER_TAG_RE.fullmatch(tag)]
-    return sorted(valid_tags, key=parse_tag)
-
 
 def compare_versions(current_version: str, latest_tag: str) -> int:
     current = parse_version(current_version)
@@ -124,35 +111,6 @@ def evaluate_policy(
         relevant_pyproject_changed=relevant_change,
         failure_reason=failure_reason,
     )
-
-
-def run_git(*args: str, check: bool = True) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        check=check,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.strip()
-
-
-def fetch_tags() -> None:
-    subprocess.run(
-        ["git", "fetch", "--force", "--tags", "origin"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-
-
-def get_latest_tag() -> str | None:
-    tags_output = run_git("tag", "--list", "v*")
-    tags = [line.strip() for line in tags_output.splitlines() if line.strip()]
-    valid_tags = filter_semver_tags(tags)
-    if not valid_tags:
-        return None
-    return valid_tags[-1]
-
 
 def load_pyproject(path: Path) -> dict[str, Any]:
     with path.open("rb") as file_obj:

@@ -4,21 +4,27 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
-import re
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-SEMVER_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
-IGNORED_PATHS = {
+from ci_git import (
+    fetch_main_branch_ref,
+    fetch_tags,
+    get_changed_files,
+    get_latest_tag,
+    get_merge_base,
+)
+
+DEFAULT_IGNORED_PATHS = {
     "README.md",
     "CONTRIBUTING.md",
     "NOTICE",
     "uv.lock",
     "pyproject.toml",
 }
-IGNORED_PREFIXES = (".github/", "tests/", "examples/", "plugins/")
+DEFAULT_IGNORED_PREFIXES = (".github/", "tests/", "examples/", "plugins/", "LICENSE")
 
 
 @dataclass(frozen=True)
@@ -30,40 +36,38 @@ class ChangeScopeResult:
     source_changed: bool
 
 
-def run_git(*args: str, check: bool = True) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        check=check,
-        capture_output=True,
-        text=True,
+def parse_json_string_list(value: str) -> list[str]:
+    parsed = json.loads(value)
+    if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
+        raise ValueError("expected a JSON array of strings")
+    return parsed
+
+
+def is_release_relevant_source_path(
+    path: str,
+    *,
+    ignored_paths: set[str],
+    ignored_prefixes: tuple[str, ...],
+) -> bool:
+    if path in ignored_paths:
+        return False
+    return not path.startswith(ignored_prefixes)
+
+
+def classify_changed_files(
+    changed_files: list[str],
+    *,
+    ignored_paths: set[str],
+    ignored_prefixes: tuple[str, ...],
+) -> bool:
+    return any(
+        is_release_relevant_source_path(
+            path,
+            ignored_paths=ignored_paths,
+            ignored_prefixes=ignored_prefixes,
+        )
+        for path in changed_files
     )
-    return result.stdout.strip()
-
-
-def filter_semver_tags(tags: list[str]) -> list[str]:
-    valid_tags = [tag for tag in tags if SEMVER_TAG_RE.fullmatch(tag)]
-    return sorted(valid_tags, key=lambda tag: tuple(map(int, tag[1:].split("."))))
-
-
-def get_latest_tag() -> str | None:
-    tags_output = run_git("tag", "--list", "v*")
-    tags = [line.strip() for line in tags_output.splitlines() if line.strip()]
-    valid_tags = filter_semver_tags(tags)
-    if not valid_tags:
-        return None
-    return valid_tags[-1]
-
-
-def is_release_relevant_source_path(path: str) -> bool:
-    if path in IGNORED_PATHS:
-        return False
-    if path.startswith("LICENSE"):
-        return False
-    return not path.startswith(IGNORED_PREFIXES)
-
-
-def classify_changed_files(changed_files: list[str]) -> bool:
-    return any(is_release_relevant_source_path(path) for path in changed_files)
 
 
 def determine_change_scope(
@@ -72,6 +76,8 @@ def determine_change_scope(
     changed_files: list[str],
     latest_tag: str | None,
     feature_branch_base_ref: str | None,
+    ignored_paths: set[str],
+    ignored_prefixes: tuple[str, ...],
 ) -> ChangeScopeResult:
     if mode == "feature-branch":
         if feature_branch_base_ref is None:
@@ -81,7 +87,11 @@ def determine_change_scope(
             range_label=f"{feature_branch_base_ref}...HEAD",
             pyproject_baseline_ref=feature_branch_base_ref,
             changed_files=tuple(changed_files),
-            source_changed=classify_changed_files(changed_files),
+            source_changed=classify_changed_files(
+                changed_files,
+                ignored_paths=ignored_paths,
+                ignored_prefixes=ignored_prefixes,
+            ),
         )
 
     range_label = f"{latest_tag}...HEAD" if latest_tag is not None else "tracked files in HEAD"
@@ -90,31 +100,17 @@ def determine_change_scope(
         range_label=range_label,
         pyproject_baseline_ref=latest_tag,
         changed_files=tuple(changed_files),
-        source_changed=classify_changed_files(changed_files),
+        source_changed=classify_changed_files(
+            changed_files,
+            ignored_paths=ignored_paths,
+            ignored_prefixes=ignored_prefixes,
+        ),
     )
 
 
 def get_feature_branch_base_ref() -> str:
-    subprocess.run(
-        ["git", "fetch", "--no-tags", "origin", "main:refs/remotes/origin/main"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return run_git("merge-base", "HEAD", "origin/main")
-
-
-def get_changed_files(diff_ref: str | None) -> list[str]:
-    if diff_ref is None:
-        output = run_git("ls-files")
-    else:
-        output = run_git(
-            "diff",
-            "--name-only",
-            "--diff-filter=ACDMRTUXB",
-            f"{diff_ref}...HEAD",
-        )
-    return [line.strip() for line in output.splitlines() if line.strip()]
+    fetch_main_branch_ref()
+    return get_merge_base("HEAD", "origin/main")
 
 
 def write_github_outputs(result: ChangeScopeResult) -> None:
@@ -140,17 +136,25 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="Execution mode for workflow messaging.",
     )
+    parser.add_argument(
+        "--ignored-paths-json",
+        default=json.dumps(sorted(DEFAULT_IGNORED_PATHS)),
+        help="JSON array of exact paths that do not count as release-relevant source changes.",
+    )
+    parser.add_argument(
+        "--ignored-prefixes-json",
+        default=json.dumps(list(DEFAULT_IGNORED_PREFIXES)),
+        help="JSON array of path prefixes that do not count as release-relevant source changes.",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    subprocess.run(
-        ["git", "fetch", "--force", "--tags", "origin"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    ignored_paths = set(parse_json_string_list(args.ignored_paths_json))
+    ignored_prefixes = tuple(parse_json_string_list(args.ignored_prefixes_json))
+
+    fetch_tags()
 
     latest_tag = get_latest_tag()
     if args.mode == "feature-branch":
@@ -165,6 +169,8 @@ def main() -> int:
         changed_files=changed_files,
         latest_tag=latest_tag,
         feature_branch_base_ref=feature_branch_base_ref,
+        ignored_paths=ignored_paths,
+        ignored_prefixes=ignored_prefixes,
     )
     write_github_outputs(result)
 
@@ -173,6 +179,8 @@ def main() -> int:
     print(
         f"  pyproject baseline: {result.pyproject_baseline_ref or '(latest tag baseline unavailable)'}"
     )
+    print(f"  ignored paths: {sorted(ignored_paths)}")
+    print(f"  ignored prefixes: {list(ignored_prefixes)}")
     print(f"  release-relevant source changed: {str(result.source_changed).lower()}")
     if result.changed_files:
         print("  compared files:")
