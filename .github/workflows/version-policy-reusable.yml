@@ -1,0 +1,34 @@
+name: Reusable Version Policy
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: Version policy mode to pass to the helper script.
+        required: true
+        type: string
+    outputs:
+      current_tag:
+        description: The current repository tag derived from pyproject version.
+        value: ${{ jobs.version_policy.outputs.current_tag }}
+      should_release:
+        description: Whether the current main commit should produce a release.
+        value: ${{ jobs.version_policy.outputs.should_release }}
+
+jobs:
+  version_policy:
+    name: Version Policy
+    runs-on: ubuntu-latest
+    outputs:
+      current_tag: ${{ steps.version_policy.outputs.current_tag }}
+      should_release: ${{ steps.version_policy.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+      - name: Install dev dependencies
+        run: uv sync --group dev
+      - name: Enforce version policy
+        id: version_policy
+        run: uv run python .github/scripts/version_policy.py --mode "${{ inputs.mode }}"
