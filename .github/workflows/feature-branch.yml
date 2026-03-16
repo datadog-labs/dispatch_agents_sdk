@@ -5,17 +5,9 @@ on:
   push:
     branches-ignore:
       - main
-    paths-ignore:
-      - ".github/workflows/**"
-      - ".github/scripts/**"
-      - ".github/tests/**"
   pull_request:
     branches:
       - main
-    paths-ignore:
-      - ".github/workflows/**"
-      - ".github/scripts/**"
-      - ".github/tests/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
