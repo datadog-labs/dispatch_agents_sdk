@@ -365,10 +365,14 @@ class LLMClient:
 
         Args:
             messages: Conversation messages (list of dicts with role/content)
-            model: Model to use (e.g., "gpt-4o", "claude-3-5-sonnet").
-                   Uses client default, then org default if not specified.
-            provider: Provider to use (e.g., "openai", "anthropic").
-                      Uses client default, then org default if not specified.
+            model: Model to use (e.g., "gpt-4o", "claude-sonnet-4-5").
+                   If omitted, falls back to the provider's configured default_model.
+            provider: Provider to route the request to (e.g., "openai", "anthropic").
+                      If omitted, falls back to the org's ``default_provider``.
+                      If no default is configured, the request will fail with an error.
+                      **Tip:** always pass ``provider=`` explicitly when you pass
+                      ``model=`` to avoid accidentally sending a model name to the
+                      wrong provider.
             tools: Tool definitions for function calling
             temperature: Sampling temperature (0-2). Uses client default if not specified.
             max_tokens: Maximum tokens in response. Uses client default if not specified.
@@ -464,7 +468,7 @@ class LLMClient:
                 url,
                 json=payload,
                 headers=auth_headers,
-                timeout=120.0,  # LLM calls can take time
+                timeout=600.0,  # 10min — matches ALB idle timeout for long-context LLM calls
             )
             response.raise_for_status()
             data = response.json()

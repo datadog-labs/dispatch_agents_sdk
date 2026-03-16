@@ -246,8 +246,11 @@ def test_pull_request_base_payload():
     assert payload.action == "opened"
     assert payload.number == 42
     assert payload.pull_request.title == "Fix bug"
-    assert payload.repository.full_name == "octocat/test-repo"
-    assert payload.sender.login == "octocat"
+    assert (
+        payload.repository is not None
+        and payload.repository.full_name == "octocat/test-repo"
+    )
+    assert payload.sender is not None and payload.sender.login == "octocat"
 
 
 def test_issue_comment_base_payload():
@@ -887,110 +890,29 @@ def test_pydantic_required_fields_match_octokit_spec():
 
     definitions = spec.get("definitions", {})
 
-    # Map our class names to spec definition names
-    # Our naming: PullRequestOpened -> spec: pull_request$opened
-    def class_name_to_spec_key(class_name: str) -> str:
-        """Convert PullRequestOpened to pull_request$opened."""
-        # Special cases
-        special_mappings = {
-            "Push": "push",
-            "PullRequestReviewCommentCreated": "pull_request_review_comment$created",
-            "PullRequestReviewCommentEdited": "pull_request_review_comment$edited",
-            "PullRequestReviewCommentDeleted": "pull_request_review_comment$deleted",
-            "PullRequestReviewThreadResolved": "pull_request_review_thread$resolved",
-            "PullRequestReviewThreadUnresolved": "pull_request_review_thread$unresolved",
-            "PullRequestReviewSubmitted": "pull_request_review$submitted",
-            "PullRequestReviewEdited": "pull_request_review$edited",
-            "PullRequestReviewDismissed": "pull_request_review$dismissed",
-            "IssueCommentCreated": "issue_comment$created",
-            "IssueCommentEdited": "issue_comment$edited",
-            "IssueCommentDeleted": "issue_comment$deleted",
-            "CheckRunCreated": "check_run$created",
-            "CheckRunCompleted": "check_run$completed",
-            "CheckRunRerequested": "check_run$rerequested",
-            "CheckRunRequestedAction": "check_run$requested_action",
-            "CheckSuiteCompleted": "check_suite$completed",
-            "CheckSuiteRequested": "check_suite$requested",
-            "CheckSuiteRerequested": "check_suite$rerequested",
-            "WorkflowRunRequested": "workflow_run$requested",
-            "WorkflowRunCompleted": "workflow_run$completed",
-            "WorkflowRunInProgress": "workflow_run$in_progress",
-            "ReleasePublished": "release$published",
-            "ReleaseCreated": "release$created",
-            "ReleaseEdited": "release$edited",
-            "ReleaseDeleted": "release$deleted",
-            "ReleaseReleased": "release$released",
-            "ReleasePrereleased": "release$prereleased",
-            "ReleaseUnpublished": "release$unpublished",
-        }
-        if class_name in special_mappings:
-            return special_mappings[class_name]
-
-        # General pattern: PullRequestOpened -> pull_request$opened
-        # Split on capital letters
-        import re
-
-        parts = re.findall("[A-Z][a-z]*", class_name)
-        if not parts:
-            return class_name.lower()
-
-        # Find where the action starts (last word that's a known action)
-        actions = {
-            "opened",
-            "closed",
-            "reopened",
-            "edited",
-            "labeled",
-            "unlabeled",
-            "assigned",
-            "unassigned",
-            "synchronize",
-            "requested",
-            "removed",
-            "milestoned",
-            "demilestoned",
-            "locked",
-            "unlocked",
-            "transferred",
-            "pinned",
-            "unpinned",
-            "created",
-            "deleted",
-            "completed",
-            "submitted",
-            "dismissed",
-            "resolved",
-            "unresolved",
-            "published",
-            "released",
-            "prereleased",
-            "unpublished",
-        }
-
-        # Convert parts to lowercase
-        lower_parts = [p.lower() for p in parts]
-
-        # Find the action (usually the last part)
-        action_idx = None
-        for i in range(len(lower_parts) - 1, -1, -1):
-            if lower_parts[i] in actions:
-                action_idx = i
-                break
-
-        if action_idx is not None:
-            event_type = "_".join(lower_parts[:action_idx])
-            action = "_".join(lower_parts[action_idx:])
+    # Map our class names to spec definition names using _dispatch_topic.
+    # Topic format: "github.pull_request.opened" -> spec key: "pull_request$opened"
+    def class_to_spec_key(model_class: type[BaseModel]) -> str:
+        """Derive the spec key from the class's _dispatch_topic attribute."""
+        topic = model_class._dispatch_topic  # type: ignore[attr-defined]
+        suffix = topic.removeprefix("github.")
+        # Replace last "." with "$" to match spec key format (event_type$action)
+        if "." in suffix:
+            event_type, _, action = suffix.rpartition(".")
             return f"{event_type}${action}"
-
-        return "_".join(lower_parts)
+        return suffix
 
     def get_required_fields(model_class: type[BaseModel]) -> set[str]:
-        """Get the required fields for a Pydantic model (excluding ClassVars)."""
+        """Get the required fields for a Pydantic model (excluding ClassVars).
+
+        Uses the field alias when present, since spec keys use wire names (aliases).
+        """
         required = set()
         for name, field_info in model_class.model_fields.items():
             # Field is required if it has no default and isn't Optional
             if field_info.is_required():
-                required.add(name)
+                # Use alias if defined (spec keys use wire/JSON names)
+                required.add(field_info.alias if field_info.alias else name)
         return required
 
     def get_spec_required_fields(spec_key: str) -> set[str] | None:
@@ -1014,11 +936,37 @@ def test_pydantic_required_fields_match_octokit_spec():
         ):
             event_classes.append((name, obj))
 
+    # Fields that our per-action classes intentionally require even though the
+    # generic spec marks them optional. The spec defines these at the event level
+    # (across all actions), but our action-specific classes can safely require
+    # fields that are always present for that particular action.
+    known_extra_required: dict[str, set[str]] = {
+        "IssueLabeled": {"label"},
+        "IssueUnlabeled": {"label"},
+        "InstallationTargetRenamed": {"repository", "sender"},
+        "PullRequestReviewRequested": {
+            "pull_request",
+            "requested_reviewer",
+            "sender",
+            "repository",
+            "action",
+            "number",
+        },
+        "PullRequestReviewRequestRemoved": {
+            "pull_request",
+            "requested_reviewer",
+            "sender",
+            "repository",
+            "action",
+            "number",
+        },
+    }
+
     # Track failures
     failures = []
 
     for class_name, model_class in event_classes:
-        spec_key = class_name_to_spec_key(class_name)
+        spec_key = class_to_spec_key(model_class)
         spec_required = get_spec_required_fields(spec_key)
 
         if spec_required is None:
@@ -1029,6 +977,8 @@ def test_pydantic_required_fields_match_octokit_spec():
 
         # Find fields required in our model but not in the spec
         extra_required = model_required - spec_required
+        # Exclude known intentional differences
+        extra_required -= known_extra_required.get(class_name, set())
 
         if extra_required:
             failures.append(
