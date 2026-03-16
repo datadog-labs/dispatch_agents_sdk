@@ -3,10 +3,16 @@ name: Reusable Version Policy
 on:
   workflow_call:
     inputs:
-      mode:
-        description: Version policy mode to pass to the helper script.
-        required: true
+      ignored_paths_json:
+        description: JSON array of exact paths ignored by release-scope classification.
+        required: false
         type: string
+        default: '["README.md","CONTRIBUTING.md","NOTICE","uv.lock","pyproject.toml"]'
+      ignored_prefixes_json:
+        description: JSON array of path prefixes ignored by release-scope classification.
+        required: false
+        type: string
+        default: '[".github/","tests/","examples/","plugins/","LICENSE"]'
     outputs:
       current_tag:
         description: The current repository tag derived from pyproject version.
@@ -31,15 +37,14 @@ jobs:
         id: change_scope
         run: >
           uv run python .github/scripts/change_scope.py
-          --mode "${{ inputs.mode }}"
-          --ignored-paths-json '["README.md","CONTRIBUTING.md","NOTICE","uv.lock","pyproject.toml"]'
-          --ignored-prefixes-json '[".github/","tests/","examples/","plugins/","LICENSE"]'
+          --ref-name "${{ github.ref_name }}"
+          --ignored-paths-json '${{ inputs.ignored_paths_json }}'
+          --ignored-prefixes-json '${{ inputs.ignored_prefixes_json }}'
       - name: Install dev dependencies
         run: uv sync --group dev
       - name: Enforce version policy
         id: version_policy
         run: >
           uv run python .github/scripts/version_policy.py
-          --mode "${{ inputs.mode }}"
           --source-changed "${{ steps.change_scope.outputs.source_changed }}"
           --pyproject-baseline-ref "${{ steps.change_scope.outputs.pyproject_baseline_ref }}"

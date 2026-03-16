@@ -16,8 +16,6 @@ permissions:
 jobs:
   version_policy:
     uses: ./.github/workflows/version-policy-reusable.yml
-    with:
-      mode: release
 
   ci:
     name: CI

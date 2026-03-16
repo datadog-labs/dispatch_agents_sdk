@@ -90,7 +90,7 @@ def test_custom_ignored_prefixes_make_policy_explicit():
 
 def test_feature_branch_scope_uses_branch_base_for_pyproject():
     result = change_scope.determine_change_scope(
-        mode="feature-branch",
+        ref_name="feature/foo",
         changed_files=[".github/workflows/release.yml"],
         latest_tag="v0.7.3",
         feature_branch_base_ref="abc123",
@@ -105,7 +105,7 @@ def test_feature_branch_scope_uses_branch_base_for_pyproject():
 
 def test_release_scope_uses_latest_tag():
     result = change_scope.determine_change_scope(
-        mode="release",
+        ref_name="main",
         changed_files=["dispatch_agents/instrument.py"],
         latest_tag="v0.7.3",
         feature_branch_base_ref=None,
@@ -121,7 +121,7 @@ def test_release_scope_uses_latest_tag():
 def test_feature_branch_scope_requires_base_ref():
     with pytest.raises(ValueError):
         change_scope.determine_change_scope(
-            mode="feature-branch",
+            ref_name="feature/foo",
             changed_files=[],
             latest_tag="v0.7.3",
             feature_branch_base_ref=None,
@@ -141,8 +141,8 @@ def test_parse_args_requires_explicit_policy_values(monkeypatch):
         "argv",
         [
             "change_scope.py",
-            "--mode",
-            "release",
+            "--ref-name",
+            "main",
             "--ignored-paths-json",
             '["README.md"]',
             "--ignored-prefixes-json",
@@ -152,5 +152,6 @@ def test_parse_args_requires_explicit_policy_values(monkeypatch):
 
     args = change_scope.parse_args()
 
+    assert args.ref_name == "main"
     assert args.ignored_paths_json == '["README.md"]'
     assert args.ignored_prefixes_json == '[".github/"]'

@@ -156,12 +156,6 @@ def write_github_outputs(result: PolicyResult) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--mode",
-        choices=("feature-branch", "release"),
-        required=True,
-        help="Execution mode for workflow messaging.",
-    )
-    parser.add_argument(
         "--source-changed",
         choices=("true", "false"),
         required=True,
@@ -194,8 +188,7 @@ def main() -> int:
     )
     write_github_outputs(result)
 
-    mode_label = "feature branch" if args.mode == "feature-branch" else "release"
-    print(f"Version policy check ({mode_label})")
+    print("Version policy check")
     print(f"  latest tag: {result.latest_tag}")
     print(f"  current tag: {result.current_tag}")
     print(f"  pyproject baseline: {pyproject_baseline_ref or '(none)'}")

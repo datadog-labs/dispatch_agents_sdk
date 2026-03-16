@@ -13,8 +13,6 @@ concurrency:
 jobs:
   version_policy:
     uses: ./.github/workflows/version-policy-reusable.yml
-    with:
-      mode: feature-branch
 
   ci:
     name: CI

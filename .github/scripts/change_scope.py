@@ -20,7 +20,7 @@ from ci_git import (
 
 @dataclass(frozen=True)
 class ChangeScopeResult:
-    mode: str
+    ref_name: str
     range_label: str
     pyproject_baseline_ref: str | None
     changed_files: tuple[str, ...]
@@ -63,18 +63,18 @@ def classify_changed_files(
 
 def determine_change_scope(
     *,
-    mode: str,
+    ref_name: str,
     changed_files: list[str],
     latest_tag: str | None,
     feature_branch_base_ref: str | None,
     ignored_paths: set[str],
     ignored_prefixes: tuple[str, ...],
 ) -> ChangeScopeResult:
-    if mode == "feature-branch":
+    if ref_name != "main":
         if feature_branch_base_ref is None:
             raise ValueError("feature_branch_base_ref is required for feature-branch mode")
         return ChangeScopeResult(
-            mode=mode,
+            ref_name=ref_name,
             range_label=f"{feature_branch_base_ref}...HEAD",
             pyproject_baseline_ref=feature_branch_base_ref,
             changed_files=tuple(changed_files),
@@ -87,7 +87,7 @@ def determine_change_scope(
 
     range_label = f"{latest_tag}...HEAD" if latest_tag is not None else "tracked files in HEAD"
     return ChangeScopeResult(
-        mode=mode,
+        ref_name=ref_name,
         range_label=range_label,
         pyproject_baseline_ref=latest_tag,
         changed_files=tuple(changed_files),
@@ -122,10 +122,9 @@ def write_github_outputs(result: ChangeScopeResult) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--mode",
-        choices=("feature-branch", "release"),
+        "--ref-name",
         required=True,
-        help="Execution mode for workflow messaging.",
+        help="GitHub ref name for the current workflow run.",
     )
     parser.add_argument(
         "--ignored-paths-json",
@@ -148,7 +147,7 @@ def main() -> int:
     fetch_tags()
 
     latest_tag = get_latest_tag()
-    if args.mode == "feature-branch":
+    if args.ref_name != "main":
         feature_branch_base_ref = get_feature_branch_base_ref()
         changed_files = get_changed_files(feature_branch_base_ref)
     else:
@@ -156,7 +155,7 @@ def main() -> int:
         changed_files = get_changed_files(latest_tag)
 
     result = determine_change_scope(
-        mode=args.mode,
+        ref_name=args.ref_name,
         changed_files=changed_files,
         latest_tag=latest_tag,
         feature_branch_base_ref=feature_branch_base_ref,
@@ -165,7 +164,7 @@ def main() -> int:
     )
     write_github_outputs(result)
 
-    print(f"Change scope ({args.mode})")
+    print(f"Change scope ({args.ref_name})")
     print(f"  range: {result.range_label}")
     print(
         f"  pyproject baseline: {result.pyproject_baseline_ref or '(latest tag baseline unavailable)'}"
