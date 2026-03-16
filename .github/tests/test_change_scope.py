@@ -12,6 +12,15 @@ MODULE_PATH = Path(__file__).resolve().parents[2] / ".github" / "scripts" / "cha
 MODULE_NAME = "dispatch_agents_ci_change_scope"
 sys.path.insert(0, str(MODULE_PATH.parent))
 
+IGNORED_PATHS = {
+    "README.md",
+    "CONTRIBUTING.md",
+    "NOTICE",
+    "uv.lock",
+    "pyproject.toml",
+}
+IGNORED_PREFIXES = (".github/", "tests/", "examples/", "plugins/", "LICENSE")
+
 spec = importlib.util.spec_from_file_location(MODULE_NAME, MODULE_PATH)
 assert spec is not None
 assert spec.loader is not None
@@ -28,8 +37,8 @@ def test_docs_and_workflow_changes_are_not_release_relevant():
                 ".github/workflows/feature-branch.yml",
                 "tests/test_config.py",
             ],
-            ignored_paths=set(change_scope.DEFAULT_IGNORED_PATHS),
-            ignored_prefixes=change_scope.DEFAULT_IGNORED_PREFIXES,
+            ignored_paths=set(IGNORED_PATHS),
+            ignored_prefixes=IGNORED_PREFIXES,
         )
         is False
     )
@@ -39,8 +48,8 @@ def test_pyproject_change_is_deferred_to_semantic_diff():
     assert (
         change_scope.classify_changed_files(
             ["pyproject.toml"],
-            ignored_paths=set(change_scope.DEFAULT_IGNORED_PATHS),
-            ignored_prefixes=change_scope.DEFAULT_IGNORED_PREFIXES,
+            ignored_paths=set(IGNORED_PATHS),
+            ignored_prefixes=IGNORED_PREFIXES,
         )
         is False
     )
@@ -50,8 +59,8 @@ def test_sdk_change_is_release_relevant():
     assert (
         change_scope.classify_changed_files(
             ["dispatch_agents/instrument.py"],
-            ignored_paths=set(change_scope.DEFAULT_IGNORED_PATHS),
-            ignored_prefixes=change_scope.DEFAULT_IGNORED_PREFIXES,
+            ignored_paths=set(IGNORED_PATHS),
+            ignored_prefixes=IGNORED_PREFIXES,
         )
         is True
     )
@@ -61,8 +70,8 @@ def test_unknown_top_level_path_is_conservatively_relevant():
     assert (
         change_scope.classify_changed_files(
             ["new_surface/config.json"],
-            ignored_paths=set(change_scope.DEFAULT_IGNORED_PATHS),
-            ignored_prefixes=change_scope.DEFAULT_IGNORED_PREFIXES,
+            ignored_paths=set(IGNORED_PATHS),
+            ignored_prefixes=IGNORED_PREFIXES,
         )
         is True
     )
@@ -85,8 +94,8 @@ def test_feature_branch_scope_uses_branch_base_for_pyproject():
         changed_files=[".github/workflows/release.yml"],
         latest_tag="v0.7.3",
         feature_branch_base_ref="abc123",
-        ignored_paths=set(change_scope.DEFAULT_IGNORED_PATHS),
-        ignored_prefixes=change_scope.DEFAULT_IGNORED_PREFIXES,
+        ignored_paths=set(IGNORED_PATHS),
+        ignored_prefixes=IGNORED_PREFIXES,
     )
 
     assert result.range_label == "abc123...HEAD"
@@ -100,8 +109,8 @@ def test_release_scope_uses_latest_tag():
         changed_files=["dispatch_agents/instrument.py"],
         latest_tag="v0.7.3",
         feature_branch_base_ref=None,
-        ignored_paths=set(change_scope.DEFAULT_IGNORED_PATHS),
-        ignored_prefixes=change_scope.DEFAULT_IGNORED_PREFIXES,
+        ignored_paths=set(IGNORED_PATHS),
+        ignored_prefixes=IGNORED_PREFIXES,
     )
 
     assert result.range_label == "v0.7.3...HEAD"
@@ -116,11 +125,32 @@ def test_feature_branch_scope_requires_base_ref():
             changed_files=[],
             latest_tag="v0.7.3",
             feature_branch_base_ref=None,
-            ignored_paths=set(change_scope.DEFAULT_IGNORED_PATHS),
-            ignored_prefixes=change_scope.DEFAULT_IGNORED_PREFIXES,
+            ignored_paths=set(IGNORED_PATHS),
+            ignored_prefixes=IGNORED_PREFIXES,
         )
 
 
 def test_parse_json_string_list_rejects_non_string_lists():
     with pytest.raises(ValueError):
         change_scope.parse_json_string_list('["ok", 1]')
+
+
+def test_parse_args_requires_explicit_policy_values(monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "change_scope.py",
+            "--mode",
+            "release",
+            "--ignored-paths-json",
+            '["README.md"]',
+            "--ignored-prefixes-json",
+            '[".github/"]',
+        ],
+    )
+
+    args = change_scope.parse_args()
+
+    assert args.ignored_paths_json == '["README.md"]'
+    assert args.ignored_prefixes_json == '[".github/"]'

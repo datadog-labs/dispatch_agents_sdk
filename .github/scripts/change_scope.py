@@ -17,15 +17,6 @@ from ci_git import (
     get_merge_base,
 )
 
-DEFAULT_IGNORED_PATHS = {
-    "README.md",
-    "CONTRIBUTING.md",
-    "NOTICE",
-    "uv.lock",
-    "pyproject.toml",
-}
-DEFAULT_IGNORED_PREFIXES = (".github/", "tests/", "examples/", "plugins/", "LICENSE")
-
 
 @dataclass(frozen=True)
 class ChangeScopeResult:
@@ -138,12 +129,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--ignored-paths-json",
-        default=json.dumps(sorted(DEFAULT_IGNORED_PATHS)),
+        required=True,
         help="JSON array of exact paths that do not count as release-relevant source changes.",
     )
     parser.add_argument(
         "--ignored-prefixes-json",
-        default=json.dumps(list(DEFAULT_IGNORED_PREFIXES)),
+        required=True,
         help="JSON array of path prefixes that do not count as release-relevant source changes.",
     )
     return parser.parse_args()
