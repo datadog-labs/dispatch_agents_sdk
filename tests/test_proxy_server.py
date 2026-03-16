@@ -157,7 +157,7 @@ def _make_sequential_mock_client(responses: list[tuple[dict, int]]):
 class TestOpenAIPassthrough:
     @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
     def test_wraps_body_with_metadata(self, mock_client_cls, client):
-        """Raw OpenAI body is wrapped with provider_format, endpoint, and metadata."""
+        """Raw OpenAI body is wrapped with endpoint and metadata (no provider_format)."""
         mock_client_cls.return_value = _make_mock_client()
 
         resp = client.post(
@@ -171,7 +171,7 @@ class TestOpenAIPassthrough:
 
         assert resp.status_code == 200
         payload = mock_client_cls.return_value.post.call_args.kwargs["json"]
-        assert payload["provider_format"] == "openai"
+        assert "provider_format" not in payload
         assert payload["endpoint"] == "/v1/chat/completions"
         assert payload["body"]["model"] == "gpt-4o"
         assert payload["body"]["messages"] == [{"role": "user", "content": "Hello"}]
@@ -261,7 +261,7 @@ class TestOpenAIPassthrough:
 class TestAnthropicPassthrough:
     @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
     def test_wraps_body_with_anthropic_format(self, mock_client_cls, client):
-        """Raw Anthropic body is wrapped with provider_format='anthropic'."""
+        """Raw Anthropic body is wrapped with endpoint (no provider_format)."""
         mock_client_cls.return_value = _make_mock_client(MOCK_ANTHROPIC_RESPONSE)
 
         resp = client.post(
@@ -276,7 +276,7 @@ class TestAnthropicPassthrough:
 
         assert resp.status_code == 200
         payload = mock_client_cls.return_value.post.call_args.kwargs["json"]
-        assert payload["provider_format"] == "anthropic"
+        assert "provider_format" not in payload
         assert payload["endpoint"] == "/v1/messages"
         # Body is passed through unmodified
         assert payload["body"]["system"] == "You are helpful."
@@ -673,7 +673,7 @@ class TestResponsesAPIEndpoint:
 
         assert resp.status_code == 200
         payload = mock_client_cls.return_value.post.call_args.kwargs["json"]
-        assert payload["provider_format"] == "openai"
+        assert "provider_format" not in payload
         assert payload["endpoint"] == "/v1/responses"
         assert payload["body"]["input"] == "Tell me a joke"
 

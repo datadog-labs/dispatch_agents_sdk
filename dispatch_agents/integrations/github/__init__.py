@@ -34,6 +34,18 @@ Action-Specific Event Classes:
     - Create, Delete, Fork (no action)
     - StarCreated, StarDeleted
     - InstallationCreated, ...
+    - DeploymentCreated
+    - DeploymentStatusCreated
+    - DeploymentReviewApproved, DeploymentReviewRejected, DeploymentReviewRequested
+    - DependabotAlertCreated, DependabotAlertFixed, DependabotAlertDismissed,
+      DependabotAlertReintroduced, DependabotAlertAutoDismissed,
+      DependabotAlertAutoReopened, DependabotAlertReopened
+    - LabelCreated, LabelEdited, LabelDeleted
+
+No-Action Events:
+    Events with no action field (subscribe directly to the event class):
+    - CommitStatus
+    - WorkflowDispatch
 
 Base Classes (for subscribing to multiple events):
     - PullRequestBase: All pull_request.* events
@@ -44,6 +56,11 @@ Base Classes (for subscribing to multiple events):
     - ReleaseBase: All release.* events
     - StarBase: All star.* events
     - InstallationBase: All installation.* events
+    - DeploymentBase: All deployment.* events
+    - DeploymentStatusBase: All deployment_status.* events
+    - DeploymentReviewBase: All deployment_review.* events
+    - DependabotAlertBase: All dependabot_alert.* events
+    - LabelBase: All label.* events
 
 GitHub Topics:
     Events are routed to topics with the pattern "github.{event}.{action}":
@@ -52,12 +69,21 @@ GitHub Topics:
     - github.issue_comment.created
     - github.push (no action for push events)
     - github.check_run.completed
+    - github.deployment.created
+    - github.deployment_status.created
+    - github.deployment_review.approved
+    - github.deployment_review.rejected
+    - github.deployment_review.requested
+    - github.status (no action for commit status events)
+    - github.workflow_dispatch (no action for workflow dispatch events)
+    - github.dependabot_alert.created
+    - github.label.created
     - etc.
 """
 
 from __future__ import annotations
 
-from typing import ClassVar, Literal
+from typing import Any, ClassVar, Literal
 
 from pydantic import ConfigDict, Field
 
@@ -739,8 +765,14 @@ class GitHubEventPayload(BasePayload, GitHubModel):
 
     _dispatch_topic: ClassVar[str] = ""
 
-    sender: GitHubUser = Field(description="User who triggered the event")
-    repository: GitHubRepository = Field(description="Repository where event occurred")
+    sender: GitHubUser | None = Field(
+        default=None,
+        description="User who triggered the event (absent for some automated events)",
+    )
+    repository: GitHubRepository | None = Field(
+        default=None,
+        description="Repository where event occurred (absent for org-level events)",
+    )
     organization: GitHubUser | None = Field(
         default=None, description="Organization (only present for org-owned repos)"
     )
@@ -898,6 +930,47 @@ class PullRequestUnlocked(PullRequestBase):
     """Payload for github.pull_request.unlocked events."""
 
     _dispatch_topic: ClassVar[str] = "github.pull_request.unlocked"
+
+
+class PullRequestMilestoned(PullRequestBase):
+    """Payload for github.pull_request.milestoned events."""
+
+    _dispatch_topic: ClassVar[str] = "github.pull_request.milestoned"
+    milestone: GitHubMilestone = Field(description="Milestone added to the PR")
+
+
+class PullRequestDemilestoned(PullRequestBase):
+    """Payload for github.pull_request.demilestoned events."""
+
+    _dispatch_topic: ClassVar[str] = "github.pull_request.demilestoned"
+    milestone: GitHubMilestone = Field(description="Milestone removed from the PR")
+
+
+class PullRequestAutoMergeEnabled(PullRequestBase):
+    """Payload for github.pull_request.auto_merge_enabled events."""
+
+    _dispatch_topic: ClassVar[str] = "github.pull_request.auto_merge_enabled"
+    reason: str = Field(description="Reason auto-merge was enabled")
+
+
+class PullRequestAutoMergeDisabled(PullRequestBase):
+    """Payload for github.pull_request.auto_merge_disabled events."""
+
+    _dispatch_topic: ClassVar[str] = "github.pull_request.auto_merge_disabled"
+    reason: str = Field(description="Reason auto-merge was disabled")
+
+
+class PullRequestEnqueued(PullRequestBase):
+    """Payload for github.pull_request.enqueued events."""
+
+    _dispatch_topic: ClassVar[str] = "github.pull_request.enqueued"
+
+
+class PullRequestDequeued(PullRequestBase):
+    """Payload for github.pull_request.dequeued events."""
+
+    _dispatch_topic: ClassVar[str] = "github.pull_request.dequeued"
+    reason: str = Field(description="Reason the pull request was dequeued")
 
 
 class PullRequestReviewBase(GitHubEventPayload):
@@ -1128,6 +1201,12 @@ class IssueUnpinned(IssueBase):
     """Payload for github.issues.unpinned events."""
 
     _dispatch_topic: ClassVar[str] = "github.issues.unpinned"
+
+
+class IssueDeleted(IssueBase):
+    """Payload for github.issues.deleted events."""
+
+    _dispatch_topic: ClassVar[str] = "github.issues.deleted"
 
 
 class IssueCommentBase(GitHubEventPayload):
@@ -1378,6 +1457,483 @@ class WorkflowJobWaiting(WorkflowJobBase):
     """Payload for github.workflow_job.waiting events."""
 
     _dispatch_topic: ClassVar[str] = "github.workflow_job.waiting"
+
+
+# =============================================================================
+# Deployment Event Payloads
+# =============================================================================
+
+
+class GitHubDeployment(GitHubModel):
+    """GitHub deployment object."""
+
+    id: int = Field(description="Unique numeric ID of the deployment")
+    sha: str = Field(description="SHA of the commit that is being deployed")
+    ref: str = Field(description="Ref (branch or tag) that was deployed")
+    task: str = Field(description="Task name, e.g. 'deploy' or 'deploy:migrations'")
+    environment: str = Field(description="Name of the target deployment environment")
+    description: str | None = Field(
+        default=None, description="Optional description of the deployment"
+    )
+    creator: GitHubUser | None = Field(
+        default=None, description="User who created the deployment"
+    )
+    created_at: str = Field(
+        description="ISO8601 timestamp when the deployment was created"
+    )
+    updated_at: str = Field(
+        description="ISO8601 timestamp when the deployment was last updated"
+    )
+    statuses_url: str = Field(
+        description="API URL to list statuses for this deployment"
+    )
+    repository_url: str = Field(description="API URL of the repository")
+    url: str = Field(description="API URL of the deployment")
+    payload: dict[str, Any] = Field(
+        default_factory=dict, description="Extra information sent to the deployment"
+    )
+
+
+class DeploymentBase(GitHubEventPayload):
+    """Base class for deployment.* events.
+
+    Triggered when a deployment is created.
+    Use action-specific classes like DeploymentCreated.
+    """
+
+    action: str = Field(description="Event action, e.g. 'created'")
+    deployment: GitHubDeployment = Field(description="Deployment object")
+    workflow: GitHubWorkflow | None = Field(
+        default=None, description="Workflow that triggered the deployment, if any"
+    )
+    workflow_run: GitHubWorkflowRun | None = Field(
+        default=None, description="Workflow run that triggered the deployment, if any"
+    )
+
+
+class DeploymentCreated(DeploymentBase):
+    """Payload for github.deployment.created events."""
+
+    _dispatch_topic: ClassVar[str] = "github.deployment.created"
+
+
+# =============================================================================
+# Deployment Status Event Payloads
+# =============================================================================
+
+
+class GitHubDeploymentStatus(GitHubModel):
+    """GitHub deployment status object."""
+
+    id: int = Field(description="Unique numeric ID of the deployment status")
+    state: str = Field(
+        description="State of the deployment status, e.g. 'pending', 'success', 'failure', 'error', 'inactive', 'in_progress', 'queued', 'waiting'"
+    )
+    description: str | None = Field(
+        default=None, description="Optional short description of the status"
+    )
+    environment: str = Field(
+        description="Name of the target deployment environment for the status"
+    )
+    target_url: str | None = Field(
+        default=None,
+        description="URL associated with the status, e.g. a CI build URL",
+    )
+    created_at: str = Field(
+        description="ISO8601 timestamp when the deployment status was created"
+    )
+    updated_at: str = Field(
+        description="ISO8601 timestamp when the deployment status was last updated"
+    )
+    deployment_url: str = Field(description="API URL of the associated deployment")
+    repository_url: str = Field(description="API URL of the repository")
+
+
+class DeploymentStatusBase(GitHubEventPayload):
+    """Base class for deployment_status.* events.
+
+    Triggered when a deployment status is created.
+    Use action-specific classes like DeploymentStatusCreated.
+    """
+
+    action: str = Field(description="Event action, e.g. 'created'")
+    deployment_status: GitHubDeploymentStatus = Field(
+        description="Deployment status object"
+    )
+    deployment: GitHubDeployment = Field(
+        description="Deployment associated with the status"
+    )
+
+
+class DeploymentStatusCreated(DeploymentStatusBase):
+    """Payload for github.deployment_status.created events."""
+
+    _dispatch_topic: ClassVar[str] = "github.deployment_status.created"
+
+
+# =============================================================================
+# Deployment Review Event Payloads
+# =============================================================================
+
+
+class DeploymentReviewBase(GitHubEventPayload):
+    """Base class for deployment_review.* events.
+
+    Triggered when a deployment review is approved, rejected, or requested.
+    This is a GitHub Apps/Environments-specific event.
+    Use action-specific classes like DeploymentReviewApproved, etc.
+    """
+
+    action: str = Field(
+        description="Event action, e.g. 'approved', 'rejected', 'requested'"
+    )
+    # workflow_run and reviewers use dict[str, Any] rather than typed models because
+    # the deployment_review webhook delivers a stripped-down workflow run shape that
+    # differs from GitHubWorkflowRun (missing many standard fields).
+    workflow_run: dict[str, Any] | None = Field(
+        description="Workflow run associated with the deployment review"
+    )
+    since: str = Field(
+        description="ISO8601 timestamp indicating the start of the review period"
+    )
+    environment: str | None = Field(
+        default=None, description="Name of the environment being reviewed"
+    )
+    workflow_job_run: dict[str, Any] | None = Field(
+        default=None,
+        description="Workflow job run associated with the deployment review",
+    )
+    reviewers: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="List of reviewers (users or teams) for the deployment",
+    )
+    requester: GitHubUser | None = Field(
+        default=None,
+        alias="requestor",
+        description="User who requested the deployment review",
+    )
+    reviewer: GitHubUser | None = Field(
+        default=None, description="The user who reviewed the deployment"
+    )
+    comment: str | None = Field(
+        default=None, description="Comment left by the reviewer"
+    )
+
+
+class DeploymentReviewApproved(DeploymentReviewBase):
+    """Payload for github.deployment_review.approved events."""
+
+    _dispatch_topic: ClassVar[str] = "github.deployment_review.approved"
+
+
+class DeploymentReviewRejected(DeploymentReviewBase):
+    """Payload for github.deployment_review.rejected events."""
+
+    _dispatch_topic: ClassVar[str] = "github.deployment_review.rejected"
+
+
+class DeploymentReviewRequested(DeploymentReviewBase):
+    """Payload for github.deployment_review.requested events."""
+
+    _dispatch_topic: ClassVar[str] = "github.deployment_review.requested"
+
+
+# =============================================================================
+# Commit Status Event Payload
+# =============================================================================
+
+
+class GitHubStatusCommit(GitHubModel):
+    """Commit object embedded in a commit status event."""
+
+    sha: str = Field(description="The commit SHA")
+    url: str = Field(description="API URL for the commit")
+    html_url: str = Field(description="Web URL for the commit")
+    commit: dict[str, Any] = Field(
+        description="Commit data including message and author"
+    )
+
+
+class CommitStatus(GitHubEventPayload):
+    """Payload for github.status events (commit status updates).
+
+    Triggered when the status of a Git commit changes. This event has no
+    action field — it fires directly when a commit status is created or updated.
+    """
+
+    _dispatch_topic: ClassVar[str] = "github.status"
+
+    id: int = Field(description="Unique numeric ID of the status event")
+    sha: str = Field(description="The commit SHA the status applies to")
+    name: str = Field(description="Repository name")
+    target_url: str | None = Field(
+        default=None, description="URL associated with the status (e.g. CI build URL)"
+    )
+    context: str = Field(
+        description="Identifier for the status check (e.g. 'ci/circleci')"
+    )
+    description: str | None = Field(
+        default=None, description="Short human-readable description of the status"
+    )
+    state: str = Field(
+        description="State of the status: error, failure, pending, or success"
+    )
+    commit: GitHubStatusCommit = Field(
+        description="The commit object associated with this status"
+    )
+    branches: list[dict[str, Any]] = Field(
+        description="List of branches containing the commit SHA"
+    )
+    created_at: str = Field(description="ISO8601 timestamp when the status was created")
+    updated_at: str = Field(
+        description="ISO8601 timestamp when the status was last updated"
+    )
+
+
+# =============================================================================
+# WorkflowDispatch Event Payload
+# =============================================================================
+
+
+class WorkflowDispatch(GitHubEventPayload):
+    """Payload for github.workflow_dispatch events.
+
+    Triggered when a workflow is manually dispatched via the GitHub UI or
+    the API. This event has no action field — it fires directly when the
+    workflow dispatch occurs.
+    """
+
+    _dispatch_topic: ClassVar[str] = "github.workflow_dispatch"
+
+    workflow: str = Field(description="Path to the workflow file that was dispatched")
+    ref: str = Field(
+        description="The branch or tag ref that the workflow was dispatched on"
+    )
+    inputs: dict[str, Any] | None = Field(
+        default=None,
+        description="Input parameters provided when the workflow was dispatched",
+    )
+
+
+# =============================================================================
+# Dependabot Alert Event Payloads
+# =============================================================================
+
+
+class GitHubDependabotDependency(GitHubModel):
+    """Dependency information for a Dependabot alert."""
+
+    package: dict[str, Any] = Field(
+        description="Package details including ecosystem and name sub-keys"
+    )
+    manifest_path: str = Field(
+        description="Path to the manifest file where the dependency is declared"
+    )
+    scope: str | None = Field(
+        default=None, description="Dependency scope: runtime, development, or null"
+    )
+
+
+class GitHubDependabotAdvisory(GitHubModel):
+    """Security advisory associated with a Dependabot alert."""
+
+    ghsa_id: str = Field(description="GitHub Security Advisory identifier")
+    cve_id: str | None = Field(
+        default=None, description="CVE identifier, if applicable"
+    )
+    summary: str = Field(description="Short summary of the advisory")
+    description: str = Field(description="Full description of the advisory")
+    severity: str = Field(
+        description="Severity level: low, moderate, high, or critical"
+    )
+    cvss: dict[str, Any] = Field(description="CVSS score and vector string details")
+    cwes: list[dict[str, Any]] = Field(description="CWE weakness identifiers")
+    identifiers: list[dict[str, Any]] = Field(
+        description="External identifiers for the advisory"
+    )
+    references: list[dict[str, Any]] = Field(
+        description="External references for the advisory"
+    )
+    published_at: str = Field(
+        description="ISO8601 timestamp when the advisory was published"
+    )
+    updated_at: str = Field(
+        description="ISO8601 timestamp when the advisory was last updated"
+    )
+    withdrawn_at: str | None = Field(
+        default=None,
+        description="ISO8601 timestamp when the advisory was withdrawn, if applicable",
+    )
+
+
+class GitHubDependabotVulnerability(GitHubModel):
+    """Vulnerability details within a security advisory for a specific package."""
+
+    package: dict[str, Any] = Field(
+        description="Package details including ecosystem and name"
+    )
+    severity: str = Field(
+        description="Severity level: low, moderate, high, or critical"
+    )
+    vulnerable_version_range: str = Field(
+        description="Version range that is affected by the vulnerability"
+    )
+    first_patched_version: dict[str, Any] | None = Field(
+        default=None,
+        description="First version that includes a fix for the vulnerability, or null if unpatched",
+    )
+
+
+class GitHubDependabotAlert(GitHubModel):
+    """A Dependabot security alert for a repository."""
+
+    number: int = Field(description="Alert number within the repository")
+    state: str = Field(
+        description="Alert state: open, dismissed, fixed, or auto_dismissed"
+    )
+    dependency: GitHubDependabotDependency = Field(
+        description="The dependency associated with the alert"
+    )
+    security_advisory: GitHubDependabotAdvisory = Field(
+        description="The security advisory that triggered the alert"
+    )
+    security_vulnerability: GitHubDependabotVulnerability = Field(
+        description="The specific vulnerability within the advisory for this dependency"
+    )
+    url: str = Field(description="REST API URL for this alert")
+    html_url: str = Field(description="Web URL for this alert")
+    created_at: str = Field(description="ISO8601 timestamp when the alert was created")
+    updated_at: str = Field(
+        description="ISO8601 timestamp when the alert was last updated"
+    )
+    dismissed_at: str | None = Field(
+        default=None,
+        description="ISO8601 timestamp when the alert was dismissed, if applicable",
+    )
+    dismissed_by: GitHubUser | None = Field(
+        default=None, description="User who dismissed the alert, if applicable"
+    )
+    dismissed_reason: str | None = Field(
+        default=None,
+        description="Reason for dismissal: tolerable_risk, no_bandwidth, inaccurate, not_used, or null",
+    )
+    dismissed_comment: str | None = Field(
+        default=None, description="Comment provided when dismissing the alert"
+    )
+    fixed_at: str | None = Field(
+        default=None,
+        description="ISO8601 timestamp when the alert was fixed, if applicable",
+    )
+    auto_dismissed_at: str | None = Field(
+        default=None,
+        description="ISO8601 timestamp when the alert was auto-dismissed, if applicable",
+    )
+
+
+class DependabotAlertBase(GitHubEventPayload):
+    """Base class for dependabot_alert.* events.
+
+    Triggered when a Dependabot alert is:
+    - created
+    - fixed
+    - dismissed
+    - reintroduced
+    - auto_dismissed
+    - auto_reopened
+    - reopened
+
+    Use action-specific classes like DependabotAlertCreated, etc.
+    """
+
+    action: str = Field(
+        description="Event action: created, fixed, dismissed, reintroduced, auto_dismissed, auto_reopened, or reopened"
+    )
+    alert: GitHubDependabotAlert = Field(
+        description="The Dependabot alert that triggered the event"
+    )
+
+
+class DependabotAlertCreated(DependabotAlertBase):
+    """Payload for github.dependabot_alert.created events."""
+
+    _dispatch_topic: ClassVar[str] = "github.dependabot_alert.created"
+
+
+class DependabotAlertFixed(DependabotAlertBase):
+    """Payload for github.dependabot_alert.fixed events."""
+
+    _dispatch_topic: ClassVar[str] = "github.dependabot_alert.fixed"
+
+
+class DependabotAlertDismissed(DependabotAlertBase):
+    """Payload for github.dependabot_alert.dismissed events."""
+
+    _dispatch_topic: ClassVar[str] = "github.dependabot_alert.dismissed"
+
+
+class DependabotAlertReintroduced(DependabotAlertBase):
+    """Payload for github.dependabot_alert.reintroduced events."""
+
+    _dispatch_topic: ClassVar[str] = "github.dependabot_alert.reintroduced"
+
+
+class DependabotAlertAutoDismissed(DependabotAlertBase):
+    """Payload for github.dependabot_alert.auto_dismissed events."""
+
+    _dispatch_topic: ClassVar[str] = "github.dependabot_alert.auto_dismissed"
+
+
+class DependabotAlertAutoReopened(DependabotAlertBase):
+    """Payload for github.dependabot_alert.auto_reopened events."""
+
+    _dispatch_topic: ClassVar[str] = "github.dependabot_alert.auto_reopened"
+
+
+class DependabotAlertReopened(DependabotAlertBase):
+    """Payload for github.dependabot_alert.reopened events."""
+
+    _dispatch_topic: ClassVar[str] = "github.dependabot_alert.reopened"
+
+
+# =============================================================================
+# Label Event Payloads
+# =============================================================================
+
+
+class LabelBase(GitHubEventPayload):
+    """Base class for label.* events.
+
+    Triggered when a label is:
+    - created
+    - edited
+    - deleted
+
+    Use action-specific classes like LabelCreated, etc.
+    """
+
+    action: str = Field(description="Event action: created, edited, or deleted")
+    label: GitHubLabel = Field(description="The label that triggered the event")
+
+
+class LabelCreated(LabelBase):
+    """Payload for github.label.created events."""
+
+    _dispatch_topic: ClassVar[str] = "github.label.created"
+
+
+class LabelEdited(LabelBase):
+    """Payload for github.label.edited events."""
+
+    _dispatch_topic: ClassVar[str] = "github.label.edited"
+    changes: GitHubChanges | None = Field(
+        default=None, description="Changes made to the label"
+    )
+
+
+class LabelDeleted(LabelBase):
+    """Payload for github.label.deleted events."""
+
+    _dispatch_topic: ClassVar[str] = "github.label.deleted"
 
 
 # =============================================================================
@@ -1641,6 +2197,1610 @@ class InstallationRepositoriesRemoved(InstallationRepositoriesBase):
 
 
 # =============================================================================
+# Watch Event Payloads
+# =============================================================================
+
+
+class WatchBase(GitHubEventPayload):
+    """Base class for watch.* events.
+
+    Triggered when a repository is starred (watch).
+    GitHub only fires watch.started — watch.deleted is not sent.
+    """
+
+    action: str = Field(description="Event action: started")
+
+
+class WatchStarted(WatchBase):
+    """Payload for github.watch.started events."""
+
+    _dispatch_topic: ClassVar[str] = "github.watch.started"
+
+
+# =============================================================================
+# Public Event Payload (no action)
+# =============================================================================
+
+
+class Public(GitHubEventPayload):
+    """Payload for github.public events.
+
+    Triggered when a private repository is made public.
+    This event has no action field.
+    """
+
+    _dispatch_topic: ClassVar[str] = "github.public"
+
+
+# =============================================================================
+# Gollum Event Payload (Wiki, no action)
+# =============================================================================
+
+
+class Gollum(GitHubEventPayload):
+    """Payload for github.gollum events (wiki page changes).
+
+    Triggered when a wiki page is created or updated.
+    This event has no action field.
+    """
+
+    _dispatch_topic: ClassVar[str] = "github.gollum"
+
+    pages: list[dict[str, Any]] = Field(
+        description="Wiki pages that were created or updated"
+    )
+
+
+# =============================================================================
+# Ping Event Payload (no action)
+# =============================================================================
+
+
+class Ping(GitHubEventPayload):
+    """Payload for github.ping events.
+
+    Sent by GitHub when a webhook is first created or re-delivered manually.
+    This event has no action field.
+    """
+
+    _dispatch_topic: ClassVar[str] = "github.ping"
+
+    zen: str = Field(description="A random zen message from GitHub")
+    hook_id: int = Field(description="ID of the webhook that triggered the ping")
+    hook: dict[str, Any] = Field(description="Webhook configuration object")
+
+
+# =============================================================================
+# Repository Import Event Payload (no action)
+# =============================================================================
+
+
+class RepositoryImport(GitHubEventPayload):
+    """Payload for github.repository_import events.
+
+    Triggered when a repository import is started, cancelled, or completed.
+    This event has no action field — the status field indicates state.
+    """
+
+    _dispatch_topic: ClassVar[str] = "github.repository_import"
+
+    status: str = Field(description="Import status: success, cancelled, or failure")
+
+
+# =============================================================================
+# Page Build Event Payload (no action)
+# =============================================================================
+
+
+class PageBuild(GitHubEventPayload):
+    """Payload for github.page_build events.
+
+    Triggered on every push to a GitHub Pages enabled branch.
+    This event has no action field.
+    """
+
+    _dispatch_topic: ClassVar[str] = "github.page_build"
+
+    id: int = Field(description="Unique identifier of the page build")
+    build: dict[str, Any] = Field(description="Page build details")
+
+
+# =============================================================================
+# GitHub App Authorization Event Payload
+# =============================================================================
+
+
+class GitHubAppAuthorizationBase(GitHubEventPayload):
+    """Base class for github_app_authorization.* events.
+
+    Triggered when a user revokes authorization of a GitHub App.
+    """
+
+    action: str = Field(description="Event action: revoked")
+
+
+class GitHubAppAuthorizationRevoked(GitHubAppAuthorizationBase):
+    """Payload for github.github_app_authorization.revoked events."""
+
+    _dispatch_topic: ClassVar[str] = "github.github_app_authorization.revoked"
+
+
+# =============================================================================
+# Team Add Event Payload (no action)
+# =============================================================================
+
+
+class TeamAdd(GitHubEventPayload):
+    """Payload for github.team_add events.
+
+    Triggered when a repository is added to a team.
+    This event has no action field.
+    """
+
+    _dispatch_topic: ClassVar[str] = "github.team_add"
+
+    team: dict[str, Any] = Field(description="Team that was given access")
+
+
+# =============================================================================
+# Branch Protection Configuration Event Payloads
+# =============================================================================
+
+
+class BranchProtectionConfigurationBase(GitHubEventPayload):
+    """Base class for branch_protection_configuration.* events.
+
+    Triggered when branch protection is enabled or disabled for a repository.
+    """
+
+    action: str = Field(description="Event action: enabled or disabled")
+
+
+class BranchProtectionConfigurationEnabled(BranchProtectionConfigurationBase):
+    """Payload for github.branch_protection_configuration.enabled events."""
+
+    _dispatch_topic: ClassVar[str] = "github.branch_protection_configuration.enabled"
+
+
+class BranchProtectionConfigurationDisabled(BranchProtectionConfigurationBase):
+    """Payload for github.branch_protection_configuration.disabled events."""
+
+    _dispatch_topic: ClassVar[str] = "github.branch_protection_configuration.disabled"
+
+
+# =============================================================================
+# Branch Protection Rule Event Payloads
+# =============================================================================
+
+
+class BranchProtectionRuleBase(GitHubEventPayload):
+    """Base class for branch_protection_rule.* events.
+
+    Triggered when a branch protection rule is created, deleted, or edited.
+    """
+
+    action: str = Field(description="Event action: created, deleted, or edited")
+    rule: dict[str, Any] = Field(description="Branch protection rule data")
+
+
+class BranchProtectionRuleCreated(BranchProtectionRuleBase):
+    """Payload for github.branch_protection_rule.created events."""
+
+    _dispatch_topic: ClassVar[str] = "github.branch_protection_rule.created"
+
+
+class BranchProtectionRuleDeleted(BranchProtectionRuleBase):
+    """Payload for github.branch_protection_rule.deleted events."""
+
+    _dispatch_topic: ClassVar[str] = "github.branch_protection_rule.deleted"
+
+
+class BranchProtectionRuleEdited(BranchProtectionRuleBase):
+    """Payload for github.branch_protection_rule.edited events."""
+
+    _dispatch_topic: ClassVar[str] = "github.branch_protection_rule.edited"
+    changes: GitHubChanges | None = Field(
+        default=None, description="Changes made to the rule"
+    )
+
+
+# =============================================================================
+# Commit Comment Event Payloads
+# =============================================================================
+
+
+class CommitCommentBase(GitHubEventPayload):
+    """Base class for commit_comment.* events.
+
+    Triggered when a comment is created on a commit.
+    """
+
+    action: str = Field(description="Event action: created")
+    comment: dict[str, Any] = Field(description="Comment on the commit")
+
+
+class CommitCommentCreated(CommitCommentBase):
+    """Payload for github.commit_comment.created events."""
+
+    _dispatch_topic: ClassVar[str] = "github.commit_comment.created"
+
+
+# =============================================================================
+# Deploy Key Event Payloads
+# =============================================================================
+
+
+class DeployKeyBase(GitHubEventPayload):
+    """Base class for deploy_key.* events.
+
+    Triggered when a deploy key is created or deleted.
+    """
+
+    action: str = Field(description="Event action: created or deleted")
+    key: dict[str, Any] = Field(description="Deploy key data")
+
+
+class DeployKeyCreated(DeployKeyBase):
+    """Payload for github.deploy_key.created events."""
+
+    _dispatch_topic: ClassVar[str] = "github.deploy_key.created"
+
+
+class DeployKeyDeleted(DeployKeyBase):
+    """Payload for github.deploy_key.deleted events."""
+
+    _dispatch_topic: ClassVar[str] = "github.deploy_key.deleted"
+
+
+# =============================================================================
+# Member Event Payloads
+# =============================================================================
+
+
+class MemberBase(GitHubEventPayload):
+    """Base class for member.* events.
+
+    Triggered when a collaborator is added, removed, or when their
+    permissions are changed on a repository.
+    """
+
+    action: str = Field(description="Event action: added, removed, or edited")
+    member: GitHubUser = Field(description="User whose membership changed")
+
+
+class MemberAdded(MemberBase):
+    """Payload for github.member.added events."""
+
+    _dispatch_topic: ClassVar[str] = "github.member.added"
+    changes: GitHubChanges | None = Field(
+        default=None, description="Changes to the member's permissions"
+    )
+
+
+class MemberEdited(MemberBase):
+    """Payload for github.member.edited events."""
+
+    _dispatch_topic: ClassVar[str] = "github.member.edited"
+    changes: GitHubChanges = Field(description="Changes to the member's permissions")
+
+
+class MemberRemoved(MemberBase):
+    """Payload for github.member.removed events."""
+
+    _dispatch_topic: ClassVar[str] = "github.member.removed"
+
+
+# =============================================================================
+# Membership Event Payloads
+# =============================================================================
+
+
+class MembershipBase(GitHubEventPayload):
+    """Base class for membership.* events.
+
+    Triggered when a user is added or removed from a team.
+    """
+
+    action: str = Field(description="Event action: added or removed")
+    scope: str = Field(description="Scope of the membership: team")
+    member: GitHubUser = Field(description="User whose team membership changed")
+    team: dict[str, Any] = Field(
+        description="Team the user was added to or removed from"
+    )
+
+
+class MembershipAdded(MembershipBase):
+    """Payload for github.membership.added events."""
+
+    _dispatch_topic: ClassVar[str] = "github.membership.added"
+
+
+class MembershipRemoved(MembershipBase):
+    """Payload for github.membership.removed events."""
+
+    _dispatch_topic: ClassVar[str] = "github.membership.removed"
+
+
+# =============================================================================
+# Merge Group Event Payloads
+# =============================================================================
+
+
+class MergeGroupBase(GitHubEventPayload):
+    """Base class for merge_group.* events.
+
+    Triggered when a merge group is created or destroyed, or when its
+    checks are requested.
+    """
+
+    action: str = Field(description="Event action: checks_requested or destroyed")
+    merge_group: dict[str, Any] = Field(description="Merge group data")
+
+
+class MergeGroupChecksRequested(MergeGroupBase):
+    """Payload for github.merge_group.checks_requested events."""
+
+    _dispatch_topic: ClassVar[str] = "github.merge_group.checks_requested"
+
+
+class MergeGroupDestroyed(MergeGroupBase):
+    """Payload for github.merge_group.destroyed events."""
+
+    _dispatch_topic: ClassVar[str] = "github.merge_group.destroyed"
+    reason: str = Field(
+        description="Reason the merge group was destroyed: merged, invalidated, or dequeued"
+    )
+
+
+# =============================================================================
+# Meta Event Payloads (webhook deletion)
+# =============================================================================
+
+
+class MetaBase(GitHubEventPayload):
+    """Base class for meta.* events.
+
+    Triggered when a webhook is deleted.
+    """
+
+    action: str = Field(description="Event action: deleted")
+    hook_id: int = Field(description="ID of the modified webhook")
+    hook: dict[str, Any] = Field(description="Modified webhook data")
+
+
+class MetaDeleted(MetaBase):
+    """Payload for github.meta.deleted events."""
+
+    _dispatch_topic: ClassVar[str] = "github.meta.deleted"
+
+
+# =============================================================================
+# Milestone Event Payloads
+# =============================================================================
+
+
+class MilestoneEventBase(GitHubEventPayload):
+    """Base class for milestone.* events.
+
+    Triggered when a milestone is created, closed, deleted, edited, or opened.
+    Note: This is for milestone events, not the GitHubMilestone model used in
+    issue/PR payloads.
+    """
+
+    action: str = Field(
+        description="Event action: created, closed, deleted, edited, or opened"
+    )
+    milestone: GitHubMilestone = Field(description="Milestone that triggered the event")
+
+
+class MilestoneClosed(MilestoneEventBase):
+    """Payload for github.milestone.closed events."""
+
+    _dispatch_topic: ClassVar[str] = "github.milestone.closed"
+
+
+class MilestoneCreated(MilestoneEventBase):
+    """Payload for github.milestone.created events."""
+
+    _dispatch_topic: ClassVar[str] = "github.milestone.created"
+
+
+class MilestoneDeleted(MilestoneEventBase):
+    """Payload for github.milestone.deleted events."""
+
+    _dispatch_topic: ClassVar[str] = "github.milestone.deleted"
+
+
+class MilestoneEdited(MilestoneEventBase):
+    """Payload for github.milestone.edited events."""
+
+    _dispatch_topic: ClassVar[str] = "github.milestone.edited"
+    changes: GitHubChanges = Field(description="Changes made to the milestone")
+
+
+class MilestoneOpened(MilestoneEventBase):
+    """Payload for github.milestone.opened events."""
+
+    _dispatch_topic: ClassVar[str] = "github.milestone.opened"
+
+
+# =============================================================================
+# Org Block Event Payloads
+# =============================================================================
+
+
+class OrgBlockBase(GitHubEventPayload):
+    """Base class for org_block.* events.
+
+    Triggered when an organization blocks or unblocks a user.
+    """
+
+    action: str = Field(description="Event action: blocked or unblocked")
+    blocked_user: GitHubUser = Field(description="User who was blocked or unblocked")
+
+
+class OrgBlockBlocked(OrgBlockBase):
+    """Payload for github.org_block.blocked events."""
+
+    _dispatch_topic: ClassVar[str] = "github.org_block.blocked"
+
+
+class OrgBlockUnblocked(OrgBlockBase):
+    """Payload for github.org_block.unblocked events."""
+
+    _dispatch_topic: ClassVar[str] = "github.org_block.unblocked"
+
+
+# =============================================================================
+# Repository Event Payloads
+# =============================================================================
+
+
+class RepositoryEventBase(GitHubEventPayload):
+    """Base class for repository.* events.
+
+    Triggered when a repository is created, deleted, archived, unarchived,
+    publicized, privatized, edited, renamed, or transferred.
+    """
+
+    action: str = Field(
+        description="Event action: archived, created, deleted, edited, "
+        "privatized, publicized, renamed, transferred, or unarchived"
+    )
+
+
+class RepositoryArchived(RepositoryEventBase):
+    """Payload for github.repository.archived events."""
+
+    _dispatch_topic: ClassVar[str] = "github.repository.archived"
+
+
+class RepositoryCreated(RepositoryEventBase):
+    """Payload for github.repository.created events."""
+
+    _dispatch_topic: ClassVar[str] = "github.repository.created"
+
+
+class RepositoryDeleted(RepositoryEventBase):
+    """Payload for github.repository.deleted events."""
+
+    _dispatch_topic: ClassVar[str] = "github.repository.deleted"
+
+
+class RepositoryEdited(RepositoryEventBase):
+    """Payload for github.repository.edited events."""
+
+    _dispatch_topic: ClassVar[str] = "github.repository.edited"
+    changes: GitHubChanges = Field(description="Changes made to the repository")
+
+
+class RepositoryPrivatized(RepositoryEventBase):
+    """Payload for github.repository.privatized events."""
+
+    _dispatch_topic: ClassVar[str] = "github.repository.privatized"
+
+
+class RepositoryPublicized(RepositoryEventBase):
+    """Payload for github.repository.publicized events."""
+
+    _dispatch_topic: ClassVar[str] = "github.repository.publicized"
+
+
+class RepositoryRenamed(RepositoryEventBase):
+    """Payload for github.repository.renamed events."""
+
+    _dispatch_topic: ClassVar[str] = "github.repository.renamed"
+    changes: GitHubChanges = Field(description="Changes made to the repository name")
+
+
+class RepositoryTransferred(RepositoryEventBase):
+    """Payload for github.repository.transferred events."""
+
+    _dispatch_topic: ClassVar[str] = "github.repository.transferred"
+    changes: GitHubChanges = Field(description="Changes from the transfer")
+
+
+class RepositoryUnarchived(RepositoryEventBase):
+    """Payload for github.repository.unarchived events."""
+
+    _dispatch_topic: ClassVar[str] = "github.repository.unarchived"
+
+
+# =============================================================================
+# Repository Dispatch Event Payload
+# =============================================================================
+
+
+class RepositoryDispatch(GitHubEventPayload):
+    """Payload for github.repository_dispatch events.
+
+    Triggered when a client sends a POST request to the repository dispatch
+    endpoint. The action is user-defined.
+    """
+
+    _dispatch_topic: ClassVar[str] = "github.repository_dispatch"
+
+    action: str = Field(description="User-defined event action")
+    branch: str = Field(description="Branch the dispatch was triggered on")
+    client_payload: dict[str, Any] = Field(
+        description="User-defined payload sent with the dispatch"
+    )
+    installation: GitHubInstallation = Field(
+        description="GitHub App installation that triggered the dispatch"
+    )
+
+
+# =============================================================================
+# Discussion Event Payloads
+# =============================================================================
+
+
+class GitHubDiscussion(GitHubModel):
+    """GitHub Discussions post."""
+
+    id: int = Field(description="Unique numeric ID")
+    node_id: str = Field(description="GraphQL node ID")
+    number: int = Field(description="Discussion number in the repository")
+    title: str = Field(description="Discussion title")
+    body: str | None = Field(default=None, description="Discussion body text")
+    state: str = Field(description="State: open or closed")
+    category: dict[str, Any] = Field(description="Discussion category")
+    author_association: str = Field(
+        description="Author's association with the repository"
+    )
+    html_url: str = Field(description="Web URL for the discussion")
+    created_at: str = Field(description="ISO8601 creation timestamp")
+    updated_at: str = Field(description="ISO8601 last updated timestamp")
+    answered_at: str | None = Field(
+        default=None, description="ISO8601 timestamp when marked as answered"
+    )
+    answer_html_url: str | None = Field(
+        default=None, description="URL of the answer comment"
+    )
+
+
+class DiscussionBase(GitHubEventPayload):
+    """Base class for discussion.* events."""
+
+    action: str = Field(
+        description="Event action: answered, category_changed, created, deleted, "
+        "edited, labeled, locked, pinned, transferred, unanswered, "
+        "unlabeled, unlocked, or unpinned"
+    )
+    discussion: GitHubDiscussion = Field(
+        description="Discussion that triggered the event"
+    )
+
+
+class DiscussionAnswered(DiscussionBase):
+    """Payload for github.discussion.answered events."""
+
+    _dispatch_topic: ClassVar[str] = "github.discussion.answered"
+    answer: dict[str, Any] = Field(description="Comment that was marked as the answer")
+
+
+class DiscussionCategoryChanged(DiscussionBase):
+    """Payload for github.discussion.category_changed events."""
+
+    _dispatch_topic: ClassVar[str] = "github.discussion.category_changed"
+    changes: GitHubChanges = Field(description="Changes to the discussion category")
+
+
+class DiscussionCreated(DiscussionBase):
+    """Payload for github.discussion.created events."""
+
+    _dispatch_topic: ClassVar[str] = "github.discussion.created"
+
+
+class DiscussionDeleted(DiscussionBase):
+    """Payload for github.discussion.deleted events."""
+
+    _dispatch_topic: ClassVar[str] = "github.discussion.deleted"
+
+
+class DiscussionEdited(DiscussionBase):
+    """Payload for github.discussion.edited events."""
+
+    _dispatch_topic: ClassVar[str] = "github.discussion.edited"
+    changes: GitHubChanges | None = Field(
+        default=None, description="Changes made to the discussion"
+    )
+
+
+class DiscussionLabeled(DiscussionBase):
+    """Payload for github.discussion.labeled events."""
+
+    _dispatch_topic: ClassVar[str] = "github.discussion.labeled"
+    label: GitHubLabel = Field(description="Label added to the discussion")
+
+
+class DiscussionLocked(DiscussionBase):
+    """Payload for github.discussion.locked events."""
+
+    _dispatch_topic: ClassVar[str] = "github.discussion.locked"
+
+
+class DiscussionPinned(DiscussionBase):
+    """Payload for github.discussion.pinned events."""
+
+    _dispatch_topic: ClassVar[str] = "github.discussion.pinned"
+
+
+class DiscussionTransferred(DiscussionBase):
+    """Payload for github.discussion.transferred events."""
+
+    _dispatch_topic: ClassVar[str] = "github.discussion.transferred"
+    changes: GitHubChanges = Field(description="Changes from the transfer")
+
+
+class DiscussionUnanswered(DiscussionBase):
+    """Payload for github.discussion.unanswered events."""
+
+    _dispatch_topic: ClassVar[str] = "github.discussion.unanswered"
+    old_answer: dict[str, Any] = Field(
+        description="Comment that was previously the answer"
+    )
+
+
+class DiscussionUnlabeled(DiscussionBase):
+    """Payload for github.discussion.unlabeled events."""
+
+    _dispatch_topic: ClassVar[str] = "github.discussion.unlabeled"
+    label: GitHubLabel = Field(description="Label removed from the discussion")
+
+
+class DiscussionUnlocked(DiscussionBase):
+    """Payload for github.discussion.unlocked events."""
+
+    _dispatch_topic: ClassVar[str] = "github.discussion.unlocked"
+
+
+class DiscussionUnpinned(DiscussionBase):
+    """Payload for github.discussion.unpinned events."""
+
+    _dispatch_topic: ClassVar[str] = "github.discussion.unpinned"
+
+
+# =============================================================================
+# Discussion Comment Event Payloads
+# =============================================================================
+
+
+class DiscussionCommentBase(GitHubEventPayload):
+    """Base class for discussion_comment.* events."""
+
+    action: str = Field(description="Event action: created, deleted, or edited")
+    comment: dict[str, Any] = Field(description="Comment on the discussion")
+    discussion: GitHubDiscussion = Field(
+        description="Discussion the comment belongs to"
+    )
+    installation: dict[str, Any] = Field(
+        description="GitHub App installation (required for discussion_comment events)"
+    )
+
+
+class DiscussionCommentCreated(DiscussionCommentBase):
+    """Payload for github.discussion_comment.created events."""
+
+    _dispatch_topic: ClassVar[str] = "github.discussion_comment.created"
+
+
+class DiscussionCommentDeleted(DiscussionCommentBase):
+    """Payload for github.discussion_comment.deleted events."""
+
+    _dispatch_topic: ClassVar[str] = "github.discussion_comment.deleted"
+
+
+class DiscussionCommentEdited(DiscussionCommentBase):
+    """Payload for github.discussion_comment.edited events."""
+
+    _dispatch_topic: ClassVar[str] = "github.discussion_comment.edited"
+    changes: GitHubChanges = Field(description="Changes made to the comment")
+
+
+# =============================================================================
+# Team Event Payloads
+# =============================================================================
+
+
+class GitHubTeam(GitHubModel):
+    """GitHub team."""
+
+    id: int = Field(description="Unique numeric ID")
+    node_id: str = Field(description="GraphQL node ID")
+    name: str = Field(description="Team name")
+    slug: str = Field(description="URL-friendly team name")
+    description: str | None = Field(default=None, description="Team description")
+    privacy: str = Field(description="Team privacy: closed or secret")
+    permission: str = Field(description="Default permission: pull, push, or admin")
+    url: str = Field(description="API URL")
+    html_url: str = Field(description="Web URL")
+    members_url: str = Field(description="API URL for members")
+    repositories_url: str = Field(description="API URL for repositories")
+
+
+class TeamBase(GitHubEventPayload):
+    """Base class for team.* events.
+
+    Triggered when a team is created, deleted, edited, or when
+    repositories are added or removed from the team.
+    """
+
+    action: str = Field(
+        description="Event action: added_to_repository, created, deleted, "
+        "edited, or removed_from_repository"
+    )
+    team: GitHubTeam = Field(description="Team that triggered the event")
+
+
+class TeamAddedToRepository(TeamBase):
+    """Payload for github.team.added_to_repository events."""
+
+    _dispatch_topic: ClassVar[str] = "github.team.added_to_repository"
+
+
+class TeamCreated(TeamBase):
+    """Payload for github.team.created events."""
+
+    _dispatch_topic: ClassVar[str] = "github.team.created"
+
+
+class TeamDeleted(TeamBase):
+    """Payload for github.team.deleted events."""
+
+    _dispatch_topic: ClassVar[str] = "github.team.deleted"
+
+
+class TeamEdited(TeamBase):
+    """Payload for github.team.edited events."""
+
+    _dispatch_topic: ClassVar[str] = "github.team.edited"
+    changes: GitHubChanges = Field(description="Changes made to the team")
+
+
+class TeamRemovedFromRepository(TeamBase):
+    """Payload for github.team.removed_from_repository events."""
+
+    _dispatch_topic: ClassVar[str] = "github.team.removed_from_repository"
+
+
+# =============================================================================
+# Organization Event Payloads
+# =============================================================================
+
+
+class OrganizationBase(GitHubEventPayload):
+    """Base class for organization.* events.
+
+    Triggered when membership in an organization changes.
+    """
+
+    action: str = Field(
+        description="Event action: deleted, member_added, member_invited, "
+        "member_removed, or renamed"
+    )
+    membership: dict[str, Any] | None = Field(
+        default=None,
+        description="Membership details (present for member_added/removed events)",
+    )
+    invitation: dict[str, Any] | None = Field(
+        default=None,
+        description="Invitation details (present for member_invited events)",
+    )
+
+
+class OrganizationDeleted(OrganizationBase):
+    """Payload for github.organization.deleted events."""
+
+    _dispatch_topic: ClassVar[str] = "github.organization.deleted"
+
+
+class OrganizationMemberAdded(OrganizationBase):
+    """Payload for github.organization.member_added events."""
+
+    _dispatch_topic: ClassVar[str] = "github.organization.member_added"
+
+
+class OrganizationMemberInvited(OrganizationBase):
+    """Payload for github.organization.member_invited events."""
+
+    _dispatch_topic: ClassVar[str] = "github.organization.member_invited"
+    user: GitHubUser = Field(description="User who was invited")
+
+
+class OrganizationMemberRemoved(OrganizationBase):
+    """Payload for github.organization.member_removed events."""
+
+    _dispatch_topic: ClassVar[str] = "github.organization.member_removed"
+
+
+class OrganizationRenamed(OrganizationBase):
+    """Payload for github.organization.renamed events."""
+
+    _dispatch_topic: ClassVar[str] = "github.organization.renamed"
+    changes: GitHubChanges = Field(description="Changes to the organization (old name)")
+
+
+# =============================================================================
+# Code Scanning Alert Event Payloads
+# =============================================================================
+
+
+class GitHubCodeScanningAlert(GitHubModel):
+    """A code scanning alert."""
+
+    number: int = Field(description="Alert number within the repository")
+    created_at: str = Field(description="ISO8601 creation timestamp")
+    updated_at: str | None = Field(default=None, description="ISO8601 update timestamp")
+    url: str = Field(description="API URL for this alert")
+    html_url: str = Field(description="Web URL for this alert")
+    state: str = Field(description="Alert state: open, dismissed, or fixed")
+    dismissed_by: GitHubUser | None = Field(
+        default=None, description="User who dismissed the alert"
+    )
+    dismissed_at: str | None = Field(
+        default=None, description="ISO8601 dismiss timestamp"
+    )
+    dismissed_reason: str | None = Field(
+        default=None, description="Reason for dismissal"
+    )
+    rule: dict[str, Any] = Field(description="Rule that triggered the alert")
+    tool: dict[str, Any] = Field(description="Tool that generated the alert")
+    most_recent_instance: dict[str, Any] = Field(
+        description="Most recent instance of this alert"
+    )
+
+
+class CodeScanningAlertBase(GitHubEventPayload):
+    """Base class for code_scanning_alert.* events."""
+
+    action: str = Field(
+        description="Event action: appeared_in_branch, closed_by_user, created, "
+        "fixed, reopened, or reopened_by_user"
+    )
+    alert: GitHubCodeScanningAlert = Field(description="Code scanning alert data")
+    ref: str = Field(description="Git ref the alert applies to")
+    commit_oid: str = Field(description="Commit OID the alert applies to")
+
+
+class CodeScanningAlertAppearedInBranch(CodeScanningAlertBase):
+    """Payload for github.code_scanning_alert.appeared_in_branch events."""
+
+    _dispatch_topic: ClassVar[str] = "github.code_scanning_alert.appeared_in_branch"
+
+
+class CodeScanningAlertClosedByUser(CodeScanningAlertBase):
+    """Payload for github.code_scanning_alert.closed_by_user events."""
+
+    _dispatch_topic: ClassVar[str] = "github.code_scanning_alert.closed_by_user"
+
+
+class CodeScanningAlertCreated(CodeScanningAlertBase):
+    """Payload for github.code_scanning_alert.created events."""
+
+    _dispatch_topic: ClassVar[str] = "github.code_scanning_alert.created"
+
+
+class CodeScanningAlertFixed(CodeScanningAlertBase):
+    """Payload for github.code_scanning_alert.fixed events."""
+
+    _dispatch_topic: ClassVar[str] = "github.code_scanning_alert.fixed"
+
+
+class CodeScanningAlertReopened(CodeScanningAlertBase):
+    """Payload for github.code_scanning_alert.reopened events."""
+
+    _dispatch_topic: ClassVar[str] = "github.code_scanning_alert.reopened"
+
+
+class CodeScanningAlertReopenedByUser(CodeScanningAlertBase):
+    """Payload for github.code_scanning_alert.reopened_by_user events."""
+
+    _dispatch_topic: ClassVar[str] = "github.code_scanning_alert.reopened_by_user"
+
+
+# =============================================================================
+# Secret Scanning Alert Event Payloads
+# =============================================================================
+
+
+class GitHubSecretScanningAlert(GitHubModel):
+    """A secret scanning alert."""
+
+    number: int = Field(description="Alert number within the repository")
+    created_at: str = Field(description="ISO8601 creation timestamp")
+    updated_at: str | None = Field(default=None, description="ISO8601 update timestamp")
+    url: str = Field(description="API URL for this alert")
+    html_url: str = Field(description="Web URL for this alert")
+    locations_url: str = Field(description="API URL to list alert locations")
+    state: str = Field(description="Alert state: open or resolved")
+    resolution: str | None = Field(
+        default=None,
+        description="Reason for resolution: false_positive, wont_fix, "
+        "revoked, used_in_tests, or pattern_deleted",
+    )
+    resolved_at: str | None = Field(
+        default=None, description="ISO8601 resolution timestamp"
+    )
+    resolved_by: GitHubUser | None = Field(
+        default=None, description="User who resolved the alert"
+    )
+    secret_type: str = Field(description="Type of secret detected")
+    secret_type_display_name: str | None = Field(
+        default=None, description="Human-readable name of the secret type"
+    )
+    secret: str | None = Field(default=None, description="The detected secret value")
+    push_protection_bypassed: bool | None = Field(
+        default=None, description="Whether push protection was bypassed for this secret"
+    )
+    push_protection_bypassed_by: GitHubUser | None = Field(
+        default=None, description="User who bypassed push protection"
+    )
+    push_protection_bypassed_at: str | None = Field(
+        default=None, description="ISO8601 timestamp when push protection was bypassed"
+    )
+
+
+class SecretScanningAlertBase(GitHubEventPayload):
+    """Base class for secret_scanning_alert.* events."""
+
+    action: str = Field(
+        description="Event action: created, reopened, resolved, or revoked"
+    )
+    alert: GitHubSecretScanningAlert = Field(description="Secret scanning alert data")
+
+
+class SecretScanningAlertCreated(SecretScanningAlertBase):
+    """Payload for github.secret_scanning_alert.created events."""
+
+    _dispatch_topic: ClassVar[str] = "github.secret_scanning_alert.created"
+
+
+class SecretScanningAlertReopened(SecretScanningAlertBase):
+    """Payload for github.secret_scanning_alert.reopened events."""
+
+    _dispatch_topic: ClassVar[str] = "github.secret_scanning_alert.reopened"
+
+
+class SecretScanningAlertResolved(SecretScanningAlertBase):
+    """Payload for github.secret_scanning_alert.resolved events."""
+
+    _dispatch_topic: ClassVar[str] = "github.secret_scanning_alert.resolved"
+
+
+class SecretScanningAlertRevoked(SecretScanningAlertBase):
+    """Payload for github.secret_scanning_alert.revoked events."""
+
+    _dispatch_topic: ClassVar[str] = "github.secret_scanning_alert.revoked"
+
+
+# =============================================================================
+# Secret Scanning Alert Location Event Payloads
+# =============================================================================
+
+
+class SecretScanningAlertLocationBase(GitHubEventPayload):
+    """Base class for secret_scanning_alert_location.* events."""
+
+    action: str = Field(description="Event action: created")
+    alert: GitHubSecretScanningAlert = Field(
+        description="The alert the location belongs to"
+    )
+    location: dict[str, Any] = Field(description="Location data for the secret")
+
+
+class SecretScanningAlertLocationCreated(SecretScanningAlertLocationBase):
+    """Payload for github.secret_scanning_alert_location.created events."""
+
+    _dispatch_topic: ClassVar[str] = "github.secret_scanning_alert_location.created"
+
+
+# =============================================================================
+# Repository Vulnerability Alert Event Payloads
+# =============================================================================
+
+
+class RepositoryVulnerabilityAlertBase(GitHubEventPayload):
+    """Base class for repository_vulnerability_alert.* events.
+
+    Triggered when a vulnerability alert is created, dismissed, reopened,
+    or resolved. Note: action values use non-standard names (create/dismiss
+    instead of created/dismissed).
+    """
+
+    action: str = Field(description="Event action: create, dismiss, reopen, or resolve")
+    alert: dict[str, Any] = Field(description="Vulnerability alert data")
+
+
+class RepositoryVulnerabilityAlertCreate(RepositoryVulnerabilityAlertBase):
+    """Payload for github.repository_vulnerability_alert.create events."""
+
+    _dispatch_topic: ClassVar[str] = "github.repository_vulnerability_alert.create"
+
+
+class RepositoryVulnerabilityAlertDismiss(RepositoryVulnerabilityAlertBase):
+    """Payload for github.repository_vulnerability_alert.dismiss events."""
+
+    _dispatch_topic: ClassVar[str] = "github.repository_vulnerability_alert.dismiss"
+
+
+class RepositoryVulnerabilityAlertReopen(RepositoryVulnerabilityAlertBase):
+    """Payload for github.repository_vulnerability_alert.reopen events."""
+
+    _dispatch_topic: ClassVar[str] = "github.repository_vulnerability_alert.reopen"
+
+
+class RepositoryVulnerabilityAlertResolve(RepositoryVulnerabilityAlertBase):
+    """Payload for github.repository_vulnerability_alert.resolve events."""
+
+    _dispatch_topic: ClassVar[str] = "github.repository_vulnerability_alert.resolve"
+
+
+# =============================================================================
+# Security Advisory Event Payloads
+# =============================================================================
+
+
+class SecurityAdvisoryBase(GitHubEventPayload):
+    """Base class for security_advisory.* events.
+
+    Triggered when a GitHub Security Advisory is published, updated,
+    performed, or withdrawn.
+    """
+
+    action: str = Field(
+        description="Event action: performed, published, updated, or withdrawn"
+    )
+    security_advisory: dict[str, Any] = Field(
+        description="Security advisory data including CVE info, severity, and affected packages"
+    )
+
+
+class SecurityAdvisoryPerformed(SecurityAdvisoryBase):
+    """Payload for github.security_advisory.performed events."""
+
+    _dispatch_topic: ClassVar[str] = "github.security_advisory.performed"
+
+
+class SecurityAdvisoryPublished(SecurityAdvisoryBase):
+    """Payload for github.security_advisory.published events."""
+
+    _dispatch_topic: ClassVar[str] = "github.security_advisory.published"
+
+
+class SecurityAdvisoryUpdated(SecurityAdvisoryBase):
+    """Payload for github.security_advisory.updated events."""
+
+    _dispatch_topic: ClassVar[str] = "github.security_advisory.updated"
+
+
+class SecurityAdvisoryWithdrawn(SecurityAdvisoryBase):
+    """Payload for github.security_advisory.withdrawn events."""
+
+    _dispatch_topic: ClassVar[str] = "github.security_advisory.withdrawn"
+
+
+# =============================================================================
+# Marketplace Purchase Event Payloads
+# =============================================================================
+
+
+class MarketplacePurchaseBase(GitHubEventPayload):
+    """Base class for marketplace_purchase.* events.
+
+    Triggered when a GitHub Marketplace purchase is made or changed.
+    """
+
+    action: str = Field(
+        description="Event action: cancelled, changed, pending_change, "
+        "pending_change_cancelled, or purchased"
+    )
+    effective_date: str = Field(description="ISO8601 date when the change takes effect")
+    marketplace_purchase: dict[str, Any] = Field(
+        description="Marketplace purchase details including plan and billing cycle"
+    )
+    previous_marketplace_purchase: dict[str, Any] | None = Field(
+        default=None,
+        description="Previous marketplace purchase (present for change events)",
+    )
+
+
+class MarketplacePurchaseCancelled(MarketplacePurchaseBase):
+    """Payload for github.marketplace_purchase.cancelled events."""
+
+    _dispatch_topic: ClassVar[str] = "github.marketplace_purchase.cancelled"
+
+
+class MarketplacePurchaseChanged(MarketplacePurchaseBase):
+    """Payload for github.marketplace_purchase.changed events."""
+
+    _dispatch_topic: ClassVar[str] = "github.marketplace_purchase.changed"
+
+
+class MarketplacePurchasePendingChange(MarketplacePurchaseBase):
+    """Payload for github.marketplace_purchase.pending_change events."""
+
+    _dispatch_topic: ClassVar[str] = "github.marketplace_purchase.pending_change"
+
+
+class MarketplacePurchasePendingChangeCancelled(MarketplacePurchaseBase):
+    """Payload for github.marketplace_purchase.pending_change_cancelled events."""
+
+    _dispatch_topic: ClassVar[str] = (
+        "github.marketplace_purchase.pending_change_cancelled"
+    )
+
+
+class MarketplacePurchasePurchased(MarketplacePurchaseBase):
+    """Payload for github.marketplace_purchase.purchased events."""
+
+    _dispatch_topic: ClassVar[str] = "github.marketplace_purchase.purchased"
+
+
+# =============================================================================
+# Package Event Payloads
+# =============================================================================
+
+
+class PackageBase(GitHubEventPayload):
+    """Base class for package.* events.
+
+    Triggered when a GitHub Packages package is published or updated.
+    """
+
+    action: str = Field(description="Event action: published or updated")
+    package: dict[str, Any] = Field(description="Package data")
+
+
+class PackagePublished(PackageBase):
+    """Payload for github.package.published events."""
+
+    _dispatch_topic: ClassVar[str] = "github.package.published"
+
+
+class PackageUpdated(PackageBase):
+    """Payload for github.package.updated events."""
+
+    _dispatch_topic: ClassVar[str] = "github.package.updated"
+
+
+# =============================================================================
+# Registry Package Event Payloads
+# =============================================================================
+
+
+class RegistryPackageBase(GitHubEventPayload):
+    """Base class for registry_package.* events.
+
+    Triggered when a package is published or updated in the GitHub Container
+    Registry (ghcr.io).
+    """
+
+    action: str = Field(description="Event action: published or updated")
+    registry_package: dict[str, Any] = Field(description="Registry package data")
+
+
+class RegistryPackagePublished(RegistryPackageBase):
+    """Payload for github.registry_package.published events."""
+
+    _dispatch_topic: ClassVar[str] = "github.registry_package.published"
+
+
+class RegistryPackageUpdated(RegistryPackageBase):
+    """Payload for github.registry_package.updated events."""
+
+    _dispatch_topic: ClassVar[str] = "github.registry_package.updated"
+
+
+# =============================================================================
+# Project Event Payloads (classic Projects)
+# =============================================================================
+
+
+class ProjectBase(GitHubEventPayload):
+    """Base class for project.* events (GitHub Classic Projects).
+
+    Triggered when a project board is created, closed, deleted, edited,
+    or reopened.
+    """
+
+    action: str = Field(
+        description="Event action: closed, created, deleted, edited, or reopened"
+    )
+    project: dict[str, Any] = Field(description="Project board data")
+
+
+class ProjectClosed(ProjectBase):
+    """Payload for github.project.closed events."""
+
+    _dispatch_topic: ClassVar[str] = "github.project.closed"
+
+
+class ProjectCreated(ProjectBase):
+    """Payload for github.project.created events."""
+
+    _dispatch_topic: ClassVar[str] = "github.project.created"
+
+
+class ProjectDeleted(ProjectBase):
+    """Payload for github.project.deleted events."""
+
+    _dispatch_topic: ClassVar[str] = "github.project.deleted"
+
+
+class ProjectEdited(ProjectBase):
+    """Payload for github.project.edited events."""
+
+    _dispatch_topic: ClassVar[str] = "github.project.edited"
+    changes: GitHubChanges | None = Field(
+        default=None, description="Changes made to the project"
+    )
+
+
+class ProjectReopened(ProjectBase):
+    """Payload for github.project.reopened events."""
+
+    _dispatch_topic: ClassVar[str] = "github.project.reopened"
+
+
+# =============================================================================
+# Project Card Event Payloads (classic Projects)
+# =============================================================================
+
+
+class ProjectCardBase(GitHubEventPayload):
+    """Base class for project_card.* events (GitHub Classic Projects).
+
+    Triggered when a project card is converted, created, deleted, edited,
+    or moved.
+    """
+
+    action: str = Field(
+        description="Event action: converted, created, deleted, edited, or moved"
+    )
+    project_card: dict[str, Any] = Field(description="Project card data")
+
+
+class ProjectCardConverted(ProjectCardBase):
+    """Payload for github.project_card.converted events."""
+
+    _dispatch_topic: ClassVar[str] = "github.project_card.converted"
+    changes: dict[str, Any] = Field(
+        description="Changes made to the project card (previous note value)"
+    )
+
+
+class ProjectCardCreated(ProjectCardBase):
+    """Payload for github.project_card.created events."""
+
+    _dispatch_topic: ClassVar[str] = "github.project_card.created"
+
+
+class ProjectCardDeleted(ProjectCardBase):
+    """Payload for github.project_card.deleted events."""
+
+    _dispatch_topic: ClassVar[str] = "github.project_card.deleted"
+
+
+class ProjectCardEdited(ProjectCardBase):
+    """Payload for github.project_card.edited events."""
+
+    _dispatch_topic: ClassVar[str] = "github.project_card.edited"
+    changes: dict[str, Any] = Field(description="Changes made to the project card")
+
+
+class ProjectCardMoved(ProjectCardBase):
+    """Payload for github.project_card.moved events."""
+
+    _dispatch_topic: ClassVar[str] = "github.project_card.moved"
+
+
+# =============================================================================
+# Project Column Event Payloads (classic Projects)
+# =============================================================================
+
+
+class ProjectColumnBase(GitHubEventPayload):
+    """Base class for project_column.* events (GitHub Classic Projects).
+
+    Triggered when a project column is created, deleted, edited, or moved.
+    """
+
+    action: str = Field(description="Event action: created, deleted, edited, or moved")
+    project_column: dict[str, Any] = Field(description="Project column data")
+
+
+class ProjectColumnCreated(ProjectColumnBase):
+    """Payload for github.project_column.created events."""
+
+    _dispatch_topic: ClassVar[str] = "github.project_column.created"
+
+
+class ProjectColumnDeleted(ProjectColumnBase):
+    """Payload for github.project_column.deleted events."""
+
+    _dispatch_topic: ClassVar[str] = "github.project_column.deleted"
+
+
+class ProjectColumnEdited(ProjectColumnBase):
+    """Payload for github.project_column.edited events."""
+
+    _dispatch_topic: ClassVar[str] = "github.project_column.edited"
+    changes: dict[str, Any] = Field(description="Changes made to the project column")
+
+
+class ProjectColumnMoved(ProjectColumnBase):
+    """Payload for github.project_column.moved events."""
+
+    _dispatch_topic: ClassVar[str] = "github.project_column.moved"
+
+
+# =============================================================================
+# Projects V2 Item Event Payloads (new Projects)
+# =============================================================================
+
+
+class ProjectsV2ItemBase(GitHubEventPayload):
+    """Base class for projects_v2_item.* events (GitHub Projects, new version).
+
+    Triggered when a project item is archived, converted, created, deleted,
+    edited, reordered, or restored.
+    """
+
+    action: str = Field(
+        description="Event action: archived, converted, created, deleted, "
+        "edited, reordered, or restored"
+    )
+    projects_v2_item: dict[str, Any] = Field(description="Projects V2 item data")
+
+
+class ProjectsV2ItemArchived(ProjectsV2ItemBase):
+    """Payload for github.projects_v2_item.archived events."""
+
+    _dispatch_topic: ClassVar[str] = "github.projects_v2_item.archived"
+    changes: dict[str, Any] = Field(description="Changes made to the project item")
+
+
+class ProjectsV2ItemConverted(ProjectsV2ItemBase):
+    """Payload for github.projects_v2_item.converted events."""
+
+    _dispatch_topic: ClassVar[str] = "github.projects_v2_item.converted"
+    changes: dict[str, Any] = Field(description="Changes made to the project item")
+
+
+class ProjectsV2ItemCreated(ProjectsV2ItemBase):
+    """Payload for github.projects_v2_item.created events."""
+
+    _dispatch_topic: ClassVar[str] = "github.projects_v2_item.created"
+
+
+class ProjectsV2ItemDeleted(ProjectsV2ItemBase):
+    """Payload for github.projects_v2_item.deleted events."""
+
+    _dispatch_topic: ClassVar[str] = "github.projects_v2_item.deleted"
+
+
+class ProjectsV2ItemEdited(ProjectsV2ItemBase):
+    """Payload for github.projects_v2_item.edited events."""
+
+    _dispatch_topic: ClassVar[str] = "github.projects_v2_item.edited"
+    changes: dict[str, Any] = Field(description="Changes made to the project item")
+
+
+class ProjectsV2ItemReordered(ProjectsV2ItemBase):
+    """Payload for github.projects_v2_item.reordered events."""
+
+    _dispatch_topic: ClassVar[str] = "github.projects_v2_item.reordered"
+    changes: dict[str, Any] = Field(description="Changes made to the project item")
+
+
+class ProjectsV2ItemRestored(ProjectsV2ItemBase):
+    """Payload for github.projects_v2_item.restored events."""
+
+    _dispatch_topic: ClassVar[str] = "github.projects_v2_item.restored"
+    changes: dict[str, Any] = Field(description="Changes made to the project item")
+
+
+# =============================================================================
+# Sponsorship Event Payloads
+# =============================================================================
+
+
+class SponsorshipBase(GitHubEventPayload):
+    """Base class for sponsorship.* events.
+
+    Triggered when a sponsorship is created, cancelled, edited,
+    or when pending changes occur.
+    """
+
+    action: str = Field(
+        description="Event action: cancelled, created, edited, "
+        "pending_cancellation, pending_tier_change, or tier_changed"
+    )
+    sponsorship: dict[str, Any] = Field(description="Sponsorship details")
+
+
+class SponsorshipCancelled(SponsorshipBase):
+    """Payload for github.sponsorship.cancelled events."""
+
+    _dispatch_topic: ClassVar[str] = "github.sponsorship.cancelled"
+
+
+class SponsorshipCreated(SponsorshipBase):
+    """Payload for github.sponsorship.created events."""
+
+    _dispatch_topic: ClassVar[str] = "github.sponsorship.created"
+
+
+class SponsorshipEdited(SponsorshipBase):
+    """Payload for github.sponsorship.edited events."""
+
+    _dispatch_topic: ClassVar[str] = "github.sponsorship.edited"
+    changes: GitHubChanges = Field(description="Changes made to the sponsorship")
+
+
+class SponsorshipPendingCancellation(SponsorshipBase):
+    """Payload for github.sponsorship.pending_cancellation events."""
+
+    _dispatch_topic: ClassVar[str] = "github.sponsorship.pending_cancellation"
+
+
+class SponsorshipPendingTierChange(SponsorshipBase):
+    """Payload for github.sponsorship.pending_tier_change events."""
+
+    _dispatch_topic: ClassVar[str] = "github.sponsorship.pending_tier_change"
+    changes: GitHubChanges = Field(description="Pending tier change details")
+
+
+class SponsorshipTierChanged(SponsorshipBase):
+    """Payload for github.sponsorship.tier_changed events."""
+
+    _dispatch_topic: ClassVar[str] = "github.sponsorship.tier_changed"
+    changes: GitHubChanges = Field(description="Tier change details")
+
+
+# =============================================================================
+# Custom Property Event Payloads
+# =============================================================================
+
+
+class CustomPropertyBase(GitHubEventPayload):
+    """Base class for custom_property.* events.
+
+    Triggered when a custom property definition is created or deleted
+    at the organization level.
+    """
+
+    action: str = Field(description="Event action: created or deleted")
+    definition: dict[str, Any] = Field(description="Custom property definition data")
+
+
+class CustomPropertyCreated(CustomPropertyBase):
+    """Payload for github.custom_property.created events."""
+
+    _dispatch_topic: ClassVar[str] = "github.custom_property.created"
+
+
+class CustomPropertyDeleted(CustomPropertyBase):
+    """Payload for github.custom_property.deleted events."""
+
+    _dispatch_topic: ClassVar[str] = "github.custom_property.deleted"
+
+
+# =============================================================================
+# Custom Property Values Event Payloads
+# =============================================================================
+
+
+class CustomPropertyValuesBase(GitHubEventPayload):
+    """Base class for custom_property_values.* events.
+
+    Triggered when custom property values are updated for a repository.
+    """
+
+    action: str = Field(description="Event action: updated")
+    new_property_values: list[dict[str, Any]] = Field(
+        description="New custom property values after the update"
+    )
+    old_property_values: list[dict[str, Any]] = Field(
+        description="Previous custom property values before the update"
+    )
+
+
+class CustomPropertyValuesUpdated(CustomPropertyValuesBase):
+    """Payload for github.custom_property_values.updated events."""
+
+    _dispatch_topic: ClassVar[str] = "github.custom_property_values.updated"
+
+
+# =============================================================================
+# Deployment Protection Rule Event Payloads
+# =============================================================================
+
+
+class DeploymentProtectionRuleBase(GitHubEventPayload):
+    """Base class for deployment_protection_rule.* events.
+
+    Triggered when a deployment is waiting for a custom protection rule
+    to be evaluated.
+    """
+
+    action: str = Field(description="Event action: requested")
+    environment: str | None = Field(
+        default=None, description="Target deployment environment"
+    )
+    event: str | None = Field(
+        default=None, description="The event that triggered the protection rule"
+    )
+    deployment_callback_url: str | None = Field(
+        default=None,
+        description="URL to call back to when the protection rule is evaluated",
+    )
+    deployment: GitHubDeployment | None = Field(
+        default=None, description="Deployment waiting for approval"
+    )
+    pull_requests: list[dict[str, Any]] = Field(
+        default_factory=list, description="Pull requests associated with the deployment"
+    )
+
+
+class DeploymentProtectionRuleRequested(DeploymentProtectionRuleBase):
+    """Payload for github.deployment_protection_rule.requested events."""
+
+    _dispatch_topic: ClassVar[str] = "github.deployment_protection_rule.requested"
+
+
+# =============================================================================
+# Installation Target Event Payloads
+# =============================================================================
+
+
+class InstallationTargetBase(GitHubEventPayload):
+    """Base class for installation_target.* events.
+
+    Triggered when a GitHub App owner's account or organization is renamed.
+    """
+
+    action: str = Field(description="Event action: renamed")
+    target_type: str = Field(
+        description="Type of the installation target: User or Organization"
+    )
+    account: dict[str, Any] = Field(
+        description="Account (user or org) that was renamed"
+    )
+    changes: dict[str, Any] = Field(description="Changes made (e.g., old login value)")
+
+
+class InstallationTargetRenamed(InstallationTargetBase):
+    """Payload for github.installation_target.renamed events."""
+
+    _dispatch_topic: ClassVar[str] = "github.installation_target.renamed"
+    installation: GitHubInstallation = Field(
+        description="GitHub App installation associated with the renamed target"
+    )
+
+
+# =============================================================================
 # Type alias for all GitHub event payloads
 # =============================================================================
 
@@ -1663,6 +3823,54 @@ GitHubPayload = (
     | StarBase
     | InstallationBase
     | InstallationRepositoriesBase
+    | DeploymentBase
+    | DeploymentStatusBase
+    | DeploymentReviewBase
+    | CommitStatus
+    | WorkflowDispatch
+    | DependabotAlertBase
+    | LabelBase
+    | WatchBase
+    | Public
+    | Gollum
+    | Ping
+    | RepositoryImport
+    | PageBuild
+    | GitHubAppAuthorizationBase
+    | TeamAdd
+    | BranchProtectionConfigurationBase
+    | BranchProtectionRuleBase
+    | CommitCommentBase
+    | DeployKeyBase
+    | MemberBase
+    | MembershipBase
+    | MergeGroupBase
+    | MetaBase
+    | MilestoneEventBase
+    | OrgBlockBase
+    | RepositoryEventBase
+    | RepositoryDispatch
+    | DiscussionBase
+    | DiscussionCommentBase
+    | TeamBase
+    | OrganizationBase
+    | CodeScanningAlertBase
+    | SecretScanningAlertBase
+    | SecretScanningAlertLocationBase
+    | RepositoryVulnerabilityAlertBase
+    | SecurityAdvisoryBase
+    | MarketplacePurchaseBase
+    | PackageBase
+    | RegistryPackageBase
+    | ProjectBase
+    | ProjectCardBase
+    | ProjectColumnBase
+    | ProjectsV2ItemBase
+    | SponsorshipBase
+    | CustomPropertyBase
+    | CustomPropertyValuesBase
+    | DeploymentProtectionRuleBase
+    | InstallationTargetBase
 )
 
 
@@ -1751,6 +3959,42 @@ __all__ = [
     "WorkflowJobInProgress",
     "WorkflowJobCompleted",
     "WorkflowJobWaiting",
+    # Deployment events
+    "GitHubDeployment",
+    "DeploymentBase",
+    "DeploymentCreated",
+    # Deployment Status events
+    "GitHubDeploymentStatus",
+    "DeploymentStatusBase",
+    "DeploymentStatusCreated",
+    # Deployment Review events
+    "DeploymentReviewBase",
+    "DeploymentReviewApproved",
+    "DeploymentReviewRejected",
+    "DeploymentReviewRequested",
+    # Commit Status events (no action)
+    "GitHubStatusCommit",
+    "CommitStatus",
+    # WorkflowDispatch event (no action)
+    "WorkflowDispatch",
+    # Dependabot Alert events
+    "GitHubDependabotDependency",
+    "GitHubDependabotAdvisory",
+    "GitHubDependabotVulnerability",
+    "GitHubDependabotAlert",
+    "DependabotAlertBase",
+    "DependabotAlertCreated",
+    "DependabotAlertFixed",
+    "DependabotAlertDismissed",
+    "DependabotAlertReintroduced",
+    "DependabotAlertAutoDismissed",
+    "DependabotAlertAutoReopened",
+    "DependabotAlertReopened",
+    # Label events
+    "LabelBase",
+    "LabelCreated",
+    "LabelEdited",
+    "LabelDeleted",
     # Release events
     "ReleaseBase",
     "ReleaseCreated",
@@ -1812,4 +4056,213 @@ __all__ = [
     "GitHubIssuePullRequest",
     "GitHubChangeValue",
     "GitHubChanges",
+    # Watch events
+    "WatchBase",
+    "WatchStarted",
+    # Single-action events (no action field)
+    "Public",
+    "Gollum",
+    "Ping",
+    "RepositoryImport",
+    "PageBuild",
+    "TeamAdd",
+    # GitHub App Authorization events
+    "GitHubAppAuthorizationBase",
+    "GitHubAppAuthorizationRevoked",
+    # Branch Protection Configuration events
+    "BranchProtectionConfigurationBase",
+    "BranchProtectionConfigurationEnabled",
+    "BranchProtectionConfigurationDisabled",
+    # Branch Protection Rule events
+    "BranchProtectionRuleBase",
+    "BranchProtectionRuleCreated",
+    "BranchProtectionRuleDeleted",
+    "BranchProtectionRuleEdited",
+    # Commit Comment events
+    "CommitCommentBase",
+    "CommitCommentCreated",
+    # Deploy Key events
+    "DeployKeyBase",
+    "DeployKeyCreated",
+    "DeployKeyDeleted",
+    # Member events
+    "MemberBase",
+    "MemberAdded",
+    "MemberEdited",
+    "MemberRemoved",
+    # Membership events
+    "MembershipBase",
+    "MembershipAdded",
+    "MembershipRemoved",
+    # Merge Group events
+    "MergeGroupBase",
+    "MergeGroupChecksRequested",
+    "MergeGroupDestroyed",
+    # Meta events
+    "MetaBase",
+    "MetaDeleted",
+    # Milestone events
+    "MilestoneEventBase",
+    "MilestoneClosed",
+    "MilestoneCreated",
+    "MilestoneDeleted",
+    "MilestoneEdited",
+    "MilestoneOpened",
+    # Org Block events
+    "OrgBlockBase",
+    "OrgBlockBlocked",
+    "OrgBlockUnblocked",
+    # Repository events (with actions)
+    "RepositoryEventBase",
+    "RepositoryArchived",
+    "RepositoryCreated",
+    "RepositoryDeleted",
+    "RepositoryEdited",
+    "RepositoryPrivatized",
+    "RepositoryPublicized",
+    "RepositoryRenamed",
+    "RepositoryTransferred",
+    "RepositoryUnarchived",
+    "RepositoryDispatch",
+    # Issue additional actions
+    "IssueDeleted",
+    # Pull Request additional actions
+    "PullRequestMilestoned",
+    "PullRequestDemilestoned",
+    "PullRequestAutoMergeEnabled",
+    "PullRequestAutoMergeDisabled",
+    "PullRequestEnqueued",
+    "PullRequestDequeued",
+    # Discussion events
+    "GitHubDiscussion",
+    "DiscussionBase",
+    "DiscussionAnswered",
+    "DiscussionCategoryChanged",
+    "DiscussionCreated",
+    "DiscussionDeleted",
+    "DiscussionEdited",
+    "DiscussionLabeled",
+    "DiscussionLocked",
+    "DiscussionPinned",
+    "DiscussionTransferred",
+    "DiscussionUnanswered",
+    "DiscussionUnlabeled",
+    "DiscussionUnlocked",
+    "DiscussionUnpinned",
+    # Discussion Comment events
+    "DiscussionCommentBase",
+    "DiscussionCommentCreated",
+    "DiscussionCommentDeleted",
+    "DiscussionCommentEdited",
+    # Team events
+    "GitHubTeam",
+    "TeamBase",
+    "TeamAddedToRepository",
+    "TeamCreated",
+    "TeamDeleted",
+    "TeamEdited",
+    "TeamRemovedFromRepository",
+    # Organization events
+    "OrganizationBase",
+    "OrganizationDeleted",
+    "OrganizationMemberAdded",
+    "OrganizationMemberInvited",
+    "OrganizationMemberRemoved",
+    "OrganizationRenamed",
+    # Code Scanning Alert events
+    "GitHubCodeScanningAlert",
+    "CodeScanningAlertBase",
+    "CodeScanningAlertAppearedInBranch",
+    "CodeScanningAlertClosedByUser",
+    "CodeScanningAlertCreated",
+    "CodeScanningAlertFixed",
+    "CodeScanningAlertReopened",
+    "CodeScanningAlertReopenedByUser",
+    # Secret Scanning Alert events
+    "GitHubSecretScanningAlert",
+    "SecretScanningAlertBase",
+    "SecretScanningAlertCreated",
+    "SecretScanningAlertReopened",
+    "SecretScanningAlertResolved",
+    "SecretScanningAlertRevoked",
+    # Secret Scanning Alert Location events
+    "SecretScanningAlertLocationBase",
+    "SecretScanningAlertLocationCreated",
+    # Repository Vulnerability Alert events
+    "RepositoryVulnerabilityAlertBase",
+    "RepositoryVulnerabilityAlertCreate",
+    "RepositoryVulnerabilityAlertDismiss",
+    "RepositoryVulnerabilityAlertReopen",
+    "RepositoryVulnerabilityAlertResolve",
+    # Security Advisory events
+    "SecurityAdvisoryBase",
+    "SecurityAdvisoryPerformed",
+    "SecurityAdvisoryPublished",
+    "SecurityAdvisoryUpdated",
+    "SecurityAdvisoryWithdrawn",
+    # Marketplace Purchase events
+    "MarketplacePurchaseBase",
+    "MarketplacePurchaseCancelled",
+    "MarketplacePurchaseChanged",
+    "MarketplacePurchasePendingChange",
+    "MarketplacePurchasePendingChangeCancelled",
+    "MarketplacePurchasePurchased",
+    # Package events
+    "PackageBase",
+    "PackagePublished",
+    "PackageUpdated",
+    # Registry Package events
+    "RegistryPackageBase",
+    "RegistryPackagePublished",
+    "RegistryPackageUpdated",
+    # Project events
+    "ProjectBase",
+    "ProjectClosed",
+    "ProjectCreated",
+    "ProjectDeleted",
+    "ProjectEdited",
+    "ProjectReopened",
+    # Project Card events
+    "ProjectCardBase",
+    "ProjectCardConverted",
+    "ProjectCardCreated",
+    "ProjectCardDeleted",
+    "ProjectCardEdited",
+    "ProjectCardMoved",
+    # Project Column events
+    "ProjectColumnBase",
+    "ProjectColumnCreated",
+    "ProjectColumnDeleted",
+    "ProjectColumnEdited",
+    "ProjectColumnMoved",
+    # Projects V2 Item events
+    "ProjectsV2ItemBase",
+    "ProjectsV2ItemArchived",
+    "ProjectsV2ItemConverted",
+    "ProjectsV2ItemCreated",
+    "ProjectsV2ItemDeleted",
+    "ProjectsV2ItemEdited",
+    "ProjectsV2ItemReordered",
+    "ProjectsV2ItemRestored",
+    # Sponsorship events
+    "SponsorshipBase",
+    "SponsorshipCancelled",
+    "SponsorshipCreated",
+    "SponsorshipEdited",
+    "SponsorshipPendingCancellation",
+    "SponsorshipPendingTierChange",
+    "SponsorshipTierChanged",
+    # Custom Property events
+    "CustomPropertyBase",
+    "CustomPropertyCreated",
+    "CustomPropertyDeleted",
+    # Custom Property Values events
+    "CustomPropertyValuesBase",
+    "CustomPropertyValuesUpdated",
+    # Deployment Protection Rule events
+    "DeploymentProtectionRuleBase",
+    "DeploymentProtectionRuleRequested",
+    # Installation Target events
+    "InstallationTargetBase",
+    "InstallationTargetRenamed",
 ]

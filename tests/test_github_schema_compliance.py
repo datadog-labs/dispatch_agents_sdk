@@ -18,7 +18,15 @@ SCHEMA_PATH = Path(__file__).parent / "schemas" / "octokit-webhooks.json"
 
 # Type mapping from Pydantic class names to octokit schema type names
 PYDANTIC_TO_OCTOKIT_TYPE = {
-    "GitHubUser": {"user", "simple-user", "nullable-simple-user", "organization"},
+    "GitHubUser": {
+        "user",
+        "simple-user",
+        "nullable-simple-user",
+        "organization",
+        "github-org",
+        "object",
+    },
+    "GitHubDependabotAlert": {"dependabot-alert"},
     "GitHubRepository": {"repository", "repository-lite"},
     "GitHubPullRequest": {
         "pull-request",
@@ -39,14 +47,18 @@ PYDANTIC_TO_OCTOKIT_TYPE = {
     "GitHubReview": {"pull-request-review"},
     "GitHubCheckRun": {"check-run", "object"},
     "GitHubCheckSuite": {"check-suite", "object"},
-    "GitHubWorkflowRun": {"workflow-run", "object"},
+    "GitHubWorkflowRun": {"workflow-run", "deployment-workflow-run", "object"},
     "GitHubWorkflow": {"workflow", "object"},
+    "GitHubDeployment": {"deployment"},
     "GitHubWorkflowJob": {"workflow-job", "object"},
     "GitHubRelease": {"release", "release-1"},
     "GitHubCommit": {"commit", "object"},
     "GitHubCommitUser": {"committer", "object"},
     "GitHubRequestedAction": {"requested-action", "object"},
     "GitHubReviewThread": {"object"},
+    "GitHubDiscussion": {"discussion"},
+    "GitHubSecretScanningAlert": {"secret-scanning-alert", "object"},
+    "GitHubTeam": {"team"},
     "NoneType": {"null"},
 }
 
@@ -155,7 +167,7 @@ def types_are_compatible(pydantic_type: str, octokit_type: str) -> bool:
 
     # Check type mapping
     if pydantic_type in PYDANTIC_TO_OCTOKIT_TYPE:
-        return octokit_type in PYDANTIC_TO_OCKOKIT_TYPE[pydantic_type]
+        return octokit_type in PYDANTIC_TO_OCTOKIT_TYPE[pydantic_type]
 
     # Generic object types are compatible
     if pydantic_type == "object" or octokit_type == "object":
@@ -166,10 +178,6 @@ def types_are_compatible(pydantic_type: str, octokit_type: str) -> bool:
         return True
 
     return False
-
-
-# Alias for the typo fix
-PYDANTIC_TO_OCKOKIT_TYPE = PYDANTIC_TO_OCTOKIT_TYPE
 
 
 def test_sdk_fields_exist_in_octokit_schema(octokit_schema: dict[str, Any]):
@@ -239,8 +247,19 @@ def test_sdk_field_types_match_octokit(octokit_schema: dict[str, Any]):
                 )
 
             # Only check nullability for required fields.
-            # For optional fields (not in required), SDK can use None to represent "absent"
-            if field in octokit_required and p_null != o_null:
+            # For optional fields (not in required), SDK can use None to represent "absent".
+            # Skip inherited nullable fields: base classes declare some fields as optional
+            # to cover the broadest set of event shapes (e.g., repository is absent for
+            # org-level events). Subclasses that don't override inherit the nullable type,
+            # even though the specific event schema marks the field as required.
+            field_is_inherited_nullable = (
+                p_null and not o_null and field not in sdk_class.__annotations__
+            )
+            if (
+                field in octokit_required
+                and p_null != o_null
+                and not field_is_inherited_nullable
+            ):
                 nullability_errors.append(
                     f"{sdk_class.__name__}.{field}: SDK null={p_null}, schema null={o_null}"
                 )
@@ -291,29 +310,35 @@ def test_sdk_has_required_octokit_fields(octokit_schema: dict[str, Any]):
 
 
 def test_sdk_event_coverage(octokit_schema: dict[str, Any]):
-    """Report on SDK coverage of octokit events (informational)."""
+    """Every octokit webhook event must have a corresponding SDK class.
+
+    This test hard-fails if any event defined in the official octokit schema
+    is not implemented in the SDK. When GitHub adds new events, update the
+    schema (see sdk/tests/schemas/README.md) and then add the missing classes
+    to dispatch_agents/integrations/github/__init__.py.
+    """
     sdk_classes = get_sdk_event_classes()
     sdk_topics = set(sdk_classes.keys())
 
     # Extract all event definitions from octokit schema
-    octokit_events = set()
+    octokit_topics: set[str] = set()
     for def_name in octokit_schema.get("definitions", {}).keys():
-        if "$" in def_name:  # Event definitions have $ separator
+        if "$" in def_name:  # Event definitions use $ as separator
             topic = "github." + def_name.replace("$", ".")
-            # Handle event$event pattern (events without actions)
+            # Handle event$event pattern (events without actions, e.g. gollum$event)
             if topic.endswith(".event"):
                 topic = topic.rsplit(".event", 1)[0]
-            octokit_events.add(topic)
+            octokit_topics.add(topic)
 
-    implemented = sdk_topics & octokit_events
-    not_implemented = octokit_events - sdk_topics
+    missing = sorted(octokit_topics - sdk_topics)
 
-    print("\n=== SDK Event Coverage ===")
-    print(f"Implemented: {len(implemented)}/{len(octokit_events)} events")
-    print(f"Not implemented: {len(not_implemented)} events")
-
-    # This test always passes - it's informational
-    assert True
+    if missing:
+        pytest.fail(
+            f"SDK is missing {len(missing)} GitHub webhook event(s).\n"
+            "Add the missing classes to "
+            "dispatch_agents/integrations/github/__init__.py.\n"
+            "Missing topics:\n" + "\n".join(f"  - {t}" for t in missing)
+        )
 
 
 def get_all_pydantic_models() -> list[type[Any]]:

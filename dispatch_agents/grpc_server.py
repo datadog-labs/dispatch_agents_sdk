@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import signal
+import time
 from pathlib import Path
 
 import grpc
@@ -53,17 +54,18 @@ class _SubscribeLogFilter(logging.Filter):
 logging.getLogger("httpx").addFilter(_SubscribeLogFilter())
 
 # File-based health signal for ECS container health checks.
-# Written on successful subscription, removed on failure.
-# Uses /app/ (owned by dispatch user) instead of /tmp/ which may be
-# unwritable on containers with readonlyRootFilesystem before the
-# /tmp volume mount was added.
-_HEALTH_FILE = Path("/app/.dispatch_healthy")
+# Contains a Unix timestamp updated on each successful subscription.
+# The ECS health check verifies the timestamp is recent (< 90s old),
+# so a stale file from a crashed process won't fool the check.
+# Uses /tmp/ which is a writable tmpfs mount on containers with
+# readonlyRootFilesystem. The /app/ directory is read-only.
+_HEALTH_FILE = Path("/tmp/.dispatch_healthy")
 
 
 def _mark_healthy() -> None:
-    """Best-effort: create health marker file."""
+    """Best-effort: write current timestamp to health marker file."""
     try:
-        _HEALTH_FILE.touch()
+        _HEALTH_FILE.write_text(str(int(time.time())))
     except OSError as exc:
         logger.warning("Could not write health file %s: %s", _HEALTH_FILE, exc)
 
@@ -471,6 +473,7 @@ async def serve(
     port: int = 50051,
     *,
     insecure: bool = True,
+    cert_dir: str | None = None,
     subscription_interval: int = 30,
 ) -> None:
     """Start the gRPC server for the agent.
@@ -479,6 +482,7 @@ async def serve(
         agent_name: The name of the agent
         port: The port to listen on (default: 50051)
         insecure: Whether to use an insecure server (default: True for development)
+        cert_dir: Directory containing server.crt, server.key, ca.crt for mTLS
         subscription_interval: Seconds between subscription attempts (default: 30)
     """
     server = aio.server()
@@ -490,8 +494,19 @@ async def serve(
         server.add_insecure_port(listen_addr)
         logger.info(f"Starting insecure gRPC server on {listen_addr}")
     else:
-        # TODO: Add TLS support
-        raise NotImplementedError("TLS support not yet implemented")
+        if not cert_dir:
+            raise ValueError("cert_dir is required when insecure=False")
+        tls_dir = Path(cert_dir)
+        server_key = (tls_dir / "server.key").read_bytes()
+        server_cert = (tls_dir / "server.crt").read_bytes()
+        ca_cert = (tls_dir / "ca.crt").read_bytes()
+        server_creds = grpc.ssl_server_credentials(
+            [(server_key, server_cert)],
+            root_certificates=ca_cert,
+            require_client_auth=True,
+        )
+        server.add_secure_port(listen_addr, server_creds)
+        logger.info("Starting mTLS gRPC server on %s", listen_addr)
 
     await server.start()
     logger.info(f"gRPC server started for agent '{agent_name}' on {listen_addr}")
