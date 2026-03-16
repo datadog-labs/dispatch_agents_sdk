@@ -1,0 +1,24 @@
+name: Workflow CI
+
+on:
+  push:
+    branches-ignore:
+      - main
+    paths:
+      - ".github/workflows/**"
+      - "scripts/ci/**"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/**"
+      - "scripts/ci/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci-reusable.yml
