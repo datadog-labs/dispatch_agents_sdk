@@ -28,6 +28,16 @@ def get_now_utc() -> str:
 JsonSchema: TypeAlias = dict[str, Any]
 """A JSON Schema document, e.g. from Pydantic's model_json_schema()."""
 
+# =============================================================================
+# Feedback Types - Shared across backend, CLI, and SDK
+# =============================================================================
+
+FeedbackType: TypeAlias = Literal["bug", "feature_request", "general"]
+"""Type of customer feedback submission."""
+
+FeedbackSentiment: TypeAlias = Literal["positive", "negative"]
+"""Thumbs up/down sentiment for feedback."""
+
 
 class StrictBaseModel(BaseModel):
     """Base model with strict validation that forbids extra fields.
