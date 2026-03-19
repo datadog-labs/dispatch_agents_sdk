@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "dispatch-operator": {
-      "command": "dispatch",
-      "args": ["mcp", "serve", "operator"]
-    }
-  }
-}

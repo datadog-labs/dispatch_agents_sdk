@@ -191,6 +191,8 @@ from .models import (
     Agent,
     AgentContainerStatus,
     BaseMessage,
+    FeedbackSentiment,
+    FeedbackType,
     FunctionMessage,
     JsonSchema,
     KVGetResponse,
@@ -251,6 +253,9 @@ __all__ = [
     "SessionGetResponse",
     # type aliases
     "JsonSchema",
+    # feedback types
+    "FeedbackType",
+    "FeedbackSentiment",
     # mcp
     "get_mcp_client",
     "get_mcp_servers_config",
