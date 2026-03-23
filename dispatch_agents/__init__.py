@@ -196,6 +196,8 @@ from .models import (
     FunctionMessage,
     JsonSchema,
     KVGetResponse,
+    KVListResponse,
+    KVMemoryRecord,
     LLMCallMessage,
     MemoryWriteResponse,
     Message,
@@ -250,6 +252,8 @@ __all__ = [
     "memory",
     "MemoryWriteResponse",
     "KVGetResponse",
+    "KVListResponse",
+    "KVMemoryRecord",
     "SessionGetResponse",
     # type aliases
     "JsonSchema",
