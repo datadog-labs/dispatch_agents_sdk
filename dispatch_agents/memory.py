@@ -6,6 +6,7 @@ import httpx
 from .events import _get_api_base_url, _get_auth_headers
 from .models import (
     KVGetResponse,
+    KVListResponse,
     KVStoreRequest,
     MemoryWriteResponse,
     SessionGetResponse,
@@ -139,6 +140,27 @@ class LongTermMemoryClient:
             )
             response.raise_for_status()
             return MemoryWriteResponse.model_validate(response.json())
+
+    async def list(self, *, agent_name: str | None = None) -> KVListResponse:
+        """List all memories for an agent.
+
+        Args:
+            agent_name: Optional agent name. If not provided, uses DISPATCH_AGENT_NAME env var.
+
+        Returns:
+            The list of memory records for the agent.
+
+        Raises:
+            ValueError: If agent_name not provided and DISPATCH_AGENT_NAME env var not set.
+        """
+        resolved_agent_name = _get_agent_name(agent_name)
+        api_base_url = self._ensure_api_base_url()
+        url = f"{api_base_url}/memory/long-term/agent/{resolved_agent_name}"
+        auth_headers = _get_auth_headers()
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=auth_headers, timeout=10.0)
+            response.raise_for_status()
+            return KVListResponse.model_validate(response.json())
 
 
 class ShortTermMemoryClient:

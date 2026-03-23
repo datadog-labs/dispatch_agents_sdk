@@ -742,6 +742,21 @@ class KVGetResponse(StrictBaseModel):
     value: str | None
 
 
+class KVMemoryRecord(StrictBaseModel):
+    """A single long-term memory record."""
+
+    mem_key: str
+    mem_value: str
+    last_updated: str | None = None
+
+
+class KVListResponse(StrictBaseModel):
+    """Response from a long-term memory list operation."""
+
+    agent_name: str
+    memories: list[KVMemoryRecord]
+
+
 class SessionGetResponse(StrictBaseModel):
     """Response from a short-term memory get operation."""
 
