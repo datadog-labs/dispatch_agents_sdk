@@ -7,7 +7,7 @@ on:
         description: JSON array of exact paths ignored by release-scope classification.
         required: false
         type: string
-        default: '["README.md","CONTRIBUTING.md","NOTICE","uv.lock","pyproject.toml"]'
+        default: '["README.md","CONTRIBUTING.md","NOTICE","uv.lock","pyproject.toml","RELEASE_NOTES.md"]'
       ignored_prefixes_json:
         description: JSON array of path prefixes ignored by release-scope classification.
         required: false
@@ -47,4 +47,5 @@ jobs:
         run: >
           uv run python .github/scripts/version_policy.py
           --source-changed "${{ steps.change_scope.outputs.source_changed }}"
+          --release-notes-changed "${{ steps.change_scope.outputs.release_notes_changed }}"
           --pyproject-baseline-ref "${{ steps.change_scope.outputs.pyproject_baseline_ref }}"

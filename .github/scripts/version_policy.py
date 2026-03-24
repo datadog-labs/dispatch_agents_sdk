@@ -28,6 +28,7 @@ class PolicyResult:
     has_version_bump: bool
     should_release: bool
     relevant_pyproject_changed: bool
+    release_notes_changed: bool
     failure_reason: str | None
 
 
@@ -75,6 +76,7 @@ def is_relevant_pyproject_change(
 def evaluate_policy(
     *,
     source_changed: bool,
+    release_notes_changed: bool,
     current_pyproject: dict[str, Any],
     baseline_pyproject: dict[str, Any] | None,
     latest_tag: str | None,
@@ -100,6 +102,11 @@ def evaluate_policy(
             "Changes require a semantic version bump, "
             f"but {current_tag} is not greater than {baseline_tag}."
         )
+    elif has_bump and not release_notes_changed:
+        failure_reason = (
+            "Version bump detected but RELEASE_NOTES.md was not updated. "
+            "Add release notes before merging."
+        )
 
     return PolicyResult(
         current_version=current_version,
@@ -108,8 +115,9 @@ def evaluate_policy(
         source_changed=source_changed,
         requires_version_bump=bump_required,
         has_version_bump=has_bump,
-        should_release=has_bump,
+        should_release=has_bump and release_notes_changed,
         relevant_pyproject_changed=relevant_change,
+        release_notes_changed=release_notes_changed,
         failure_reason=failure_reason,
     )
 
@@ -168,6 +176,12 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Git ref to use as the pyproject.toml comparison baseline. Defaults to the latest release tag when omitted.",
     )
+    parser.add_argument(
+        "--release-notes-changed",
+        choices=("true", "false"),
+        required=True,
+        help="Whether RELEASE_NOTES.md was updated in the current change set.",
+    )
     return parser.parse_args()
 
 
@@ -181,9 +195,11 @@ def main() -> int:
     pyproject_baseline_ref = args.pyproject_baseline_ref or latest_tag
     baseline_pyproject = load_pyproject_from_ref(pyproject_baseline_ref, repo_root)
     source_changed = args.source_changed == "true"
+    release_notes_changed = args.release_notes_changed == "true"
 
     result = evaluate_policy(
         source_changed=source_changed,
+        release_notes_changed=release_notes_changed,
         current_pyproject=current_pyproject,
         baseline_pyproject=baseline_pyproject,
         latest_tag=latest_tag,
@@ -195,6 +211,7 @@ def main() -> int:
     print(f"  current tag: {result.current_tag}")
     print(f"  pyproject baseline: {pyproject_baseline_ref or '(none)'}")
     print(f"  source changed: {str(result.source_changed).lower()}")
+    print(f"  release notes changed: {str(result.release_notes_changed).lower()}")
     print(f"  requires bump: {str(result.requires_version_bump).lower()}")
     print(f"  should release: {str(result.should_release).lower()}")
 
