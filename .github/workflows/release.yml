@@ -55,7 +55,7 @@ jobs:
         with:
           tag_name: "${{ needs.version_policy.outputs.current_tag }}"
           name: "${{ needs.version_policy.outputs.current_tag }}"
-          generate_release_notes: true
+          body_path: RELEASE_NOTES.md
           files: dist/*
 
   publish:

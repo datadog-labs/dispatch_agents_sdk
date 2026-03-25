@@ -25,6 +25,7 @@ class ChangeScopeResult:
     pyproject_baseline_ref: str | None
     changed_files: tuple[str, ...]
     source_changed: bool
+    release_notes_changed: bool
 
 
 def parse_json_string_list(value: str) -> list[str]:
@@ -87,6 +88,7 @@ def determine_change_scope(
                 ignored_paths=ignored_paths,
                 ignored_prefixes=ignored_prefixes,
             ),
+            release_notes_changed="RELEASE_NOTES.md" in changed_files,
         )
 
     range_label = (
@@ -102,6 +104,7 @@ def determine_change_scope(
             ignored_paths=ignored_paths,
             ignored_prefixes=ignored_prefixes,
         ),
+        release_notes_changed="RELEASE_NOTES.md" in changed_files,
     )
 
 
@@ -117,6 +120,7 @@ def write_github_outputs(result: ChangeScopeResult) -> None:
 
     outputs = {
         "source_changed": str(result.source_changed).lower(),
+        "release_notes_changed": str(result.release_notes_changed).lower(),
         "pyproject_baseline_ref": result.pyproject_baseline_ref or "",
     }
 

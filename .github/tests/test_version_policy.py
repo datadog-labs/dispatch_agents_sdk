@@ -37,7 +37,7 @@ def pyproject(
             "build-backend": "hatchling.build",
         },
         "project": {
-            "name": "dispatch_agents",
+            "name": "dispatch-agents",
             "version": version,
             "description": description,
         },
@@ -63,6 +63,7 @@ def pyproject(
 def test_sdk_change_requires_bump_when_version_is_unchanged():
     result = version_policy.evaluate_policy(
         source_changed=True,
+        release_notes_changed=False,
         current_pyproject=pyproject(version="0.7.3"),
         baseline_pyproject=pyproject(version="0.7.2"),
         latest_tag="v0.7.3",
@@ -76,6 +77,7 @@ def test_sdk_change_requires_bump_when_version_is_unchanged():
 def test_sdk_change_passes_with_higher_version():
     result = version_policy.evaluate_policy(
         source_changed=True,
+        release_notes_changed=True,
         current_pyproject=pyproject(version="0.7.4"),
         baseline_pyproject=pyproject(version="0.7.3"),
         latest_tag="v0.7.3",
@@ -90,6 +92,7 @@ def test_sdk_change_passes_with_higher_version():
 def test_docs_only_change_does_not_require_bump():
     result = version_policy.evaluate_policy(
         source_changed=False,
+        release_notes_changed=False,
         current_pyproject=pyproject(version="0.7.3"),
         baseline_pyproject=pyproject(version="0.7.3"),
         latest_tag="v0.7.3",
@@ -104,6 +107,7 @@ def test_docs_only_change_does_not_require_bump():
 def test_relevant_pyproject_change_requires_bump():
     result = version_policy.evaluate_policy(
         source_changed=False,
+        release_notes_changed=False,
         current_pyproject=pyproject(version="0.7.3", description="Updated SDK"),
         baseline_pyproject=pyproject(version="0.7.2"),
         latest_tag="v0.7.3",
@@ -117,6 +121,7 @@ def test_relevant_pyproject_change_requires_bump():
 def test_dev_tooling_pyproject_change_does_not_require_bump():
     result = version_policy.evaluate_policy(
         source_changed=False,
+        release_notes_changed=False,
         current_pyproject=pyproject(
             version="0.7.3",
             dev_dependencies=["pytest>=8.4.2", "ruff>=0.14.1"],
@@ -133,6 +138,7 @@ def test_dev_tooling_pyproject_change_does_not_require_bump():
 def test_lower_than_latest_release_fails_even_for_docs_change():
     result = version_policy.evaluate_policy(
         source_changed=False,
+        release_notes_changed=False,
         current_pyproject=pyproject(version="0.7.2"),
         baseline_pyproject=pyproject(version="0.7.3"),
         latest_tag="v0.7.3",
@@ -146,6 +152,7 @@ def test_lower_than_latest_release_fails_even_for_docs_change():
 def test_no_tag_baseline_allows_initial_version():
     result = version_policy.evaluate_policy(
         source_changed=True,
+        release_notes_changed=True,
         current_pyproject=pyproject(version="0.1.0"),
         baseline_pyproject=None,
         latest_tag=None,
@@ -160,6 +167,7 @@ def test_no_tag_baseline_allows_initial_version():
 def test_workflow_classified_release_relevant_change_requires_bump():
     result = version_policy.evaluate_policy(
         source_changed=True,
+        release_notes_changed=False,
         current_pyproject=pyproject(version="0.7.3"),
         baseline_pyproject=pyproject(version="0.7.2"),
         latest_tag="v0.7.3",
@@ -167,6 +175,23 @@ def test_workflow_classified_release_relevant_change_requires_bump():
 
     assert result.requires_version_bump is True
     assert result.failure_reason is not None
+
+
+def test_version_bump_requires_release_notes_update():
+    result = version_policy.evaluate_policy(
+        source_changed=True,
+        release_notes_changed=False,
+        current_pyproject=pyproject(version="0.7.4"),
+        baseline_pyproject=pyproject(version="0.7.3"),
+        latest_tag="v0.7.3",
+    )
+
+    assert result.has_version_bump is True
+    assert result.should_release is False
+    assert result.failure_reason == (
+        "Version bump detected but RELEASE_NOTES.md was not updated. "
+        "Add release notes before merging."
+    )
 
 
 def test_fetch_tags_raises_on_failure(monkeypatch):
