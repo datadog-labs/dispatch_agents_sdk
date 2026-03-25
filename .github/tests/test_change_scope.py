@@ -18,6 +18,7 @@ IGNORED_PATHS = {
     "README.md",
     "CONTRIBUTING.md",
     "NOTICE",
+    "RELEASE_NOTES.md",
     "uv.lock",
     "pyproject.toml",
 }
@@ -50,6 +51,17 @@ def test_pyproject_change_is_deferred_to_semantic_diff():
     assert (
         change_scope.classify_changed_files(
             ["pyproject.toml"],
+            ignored_paths=set(IGNORED_PATHS),
+            ignored_prefixes=IGNORED_PREFIXES,
+        )
+        is False
+    )
+
+
+def test_release_notes_change_is_not_release_relevant_source():
+    assert (
+        change_scope.classify_changed_files(
+            ["RELEASE_NOTES.md"],
             ignored_paths=set(IGNORED_PATHS),
             ignored_prefixes=IGNORED_PREFIXES,
         )
@@ -118,6 +130,20 @@ def test_release_scope_uses_latest_tag():
     assert result.range_label == "v0.7.3...HEAD"
     assert result.pyproject_baseline_ref == "v0.7.3"
     assert result.source_changed is True
+
+
+def test_release_notes_change_is_tracked_separately_from_source_scope():
+    result = change_scope.determine_change_scope(
+        ref_name="feature/foo",
+        changed_files=["RELEASE_NOTES.md"],
+        latest_tag="v0.7.3",
+        feature_branch_base_ref="abc123",
+        ignored_paths=set(IGNORED_PATHS),
+        ignored_prefixes=IGNORED_PREFIXES,
+    )
+
+    assert result.source_changed is False
+    assert result.release_notes_changed is True
 
 
 def test_feature_branch_scope_requires_base_ref():
