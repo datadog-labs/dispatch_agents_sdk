@@ -1,0 +1,13 @@
+namespace: examples
+entrypoint: agent.py
+base_image: python:3.13-slim
+agent_name: knowledge-base-query
+system_packages:
+  - jq
+secrets:
+  - name: CONFLUENCE_URL
+    secret_id: /shared/confluence-url
+  - name: CONFLUENCE_USERNAME
+    secret_id: /shared/confluence-username
+  - name: CONFLUENCE_API_TOKEN
+    secret_id: /shared/confluence-api-token
