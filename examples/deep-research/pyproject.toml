@@ -1,0 +1,14 @@
+[project]
+name = "deep-research"
+version = "0.1.0"
+requires-python = "~=3.13.0"
+dependencies = [
+    "dispatch-agents",
+    "openai>=1.0.0",
+    "tavily-python",
+    "pydantic>=2.0.0",
+    "aiohttp",
+]
+
+[tool.uv.sources]
+dispatch-agents = { path = "../../sdk" }
