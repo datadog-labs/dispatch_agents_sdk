@@ -88,6 +88,10 @@ from typing import Any, ClassVar, Literal
 from pydantic import ConfigDict, Field
 
 from dispatch_agents.events import BasePayload
+from dispatch_agents.integrations.github.client import GitHubAppToken
+from dispatch_agents.integrations.github.client import (
+    get_github_app_token as _get_github_app_token,
+)
 from dispatch_agents.models import StrictBaseModel
 
 # =============================================================================
@@ -96,6 +100,16 @@ from dispatch_agents.models import StrictBaseModel
 
 # Topic prefix for all GitHub events
 GITHUB_TOPIC_PREFIX = "github."
+
+
+async def get_github_app_token() -> GitHubAppToken:
+    """Return a GitHub App installation token.
+
+    This package-level wrapper is the canonical public import path for GitHub
+    token retrieval and delegates to the lower-level client implementation.
+    """
+
+    return await _get_github_app_token()
 
 
 # =============================================================================
@@ -4056,6 +4070,9 @@ __all__ = [
     "GitHubIssuePullRequest",
     "GitHubChangeValue",
     "GitHubChanges",
+    # GitHub client
+    "get_github_app_token",
+    "GitHubAppToken",
     # Watch events
     "WatchBase",
     "WatchStarted",

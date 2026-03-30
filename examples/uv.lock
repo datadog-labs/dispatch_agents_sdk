@@ -2,6 +2,17 @@ version = 1
 revision = 3
 requires-python = ">=3.10"
 
+[options]
+exclude-newer = "2026-02-28T15:19:26.024876Z"
+exclude-newer-span = "P30D"
+
+[options.exclude-newer-package]
+dispatch-agents = { timestamp = "2026-03-30T15:19:26.02488Z", span = "PT0S" }
+claude-agent-sdk = { timestamp = "2026-03-16T15:19:26.024887Z", span = "P14D" }
+openai = { timestamp = "2026-03-16T15:19:26.024888Z", span = "P14D" }
+langchain-openai = { timestamp = "2026-03-16T15:19:26.024889Z", span = "P14D" }
+openai-agents = { timestamp = "2026-03-16T15:19:26.024888Z", span = "P14D" }
+
 [[package]]
 name = "dispatch-examples"
 version = "0.1.0"
