@@ -2,6 +2,7 @@
 
 import asyncio
 
+import aiohttp
 import dispatch_agents
 from dispatch_agents import BasePayload, fn, on
 from dispatch_agents.integrations.github import PullRequestReviewCommentCreated
@@ -11,7 +12,7 @@ from pydantic import Field, PositiveInt
 class GreetingPayload(BasePayload):
     """Input payload for greeting requests."""
 
-    subject: str = Field(description="The name or subject to greet")
+    subject: str = Field(default="World", description="The name or subject to greet")
 
 
 class GreetingResponse(BasePayload):
@@ -110,3 +111,51 @@ async def reverse(payload: ReverseRequest) -> ReverseResponse:
     """Reverse the provided text string."""
     print(f"Reversing: {payload.text!r}")
     return ReverseResponse(reversed_text=payload.text[::-1])
+
+
+class EgressTestRequest(BasePayload):
+    """Input for the egress test function."""
+
+    url: str = Field(
+        default="https://jsonplaceholder.typicode.com/todos/1",
+        description="URL to attempt to fetch",
+    )
+
+
+class EgressTestResponse(BasePayload):
+    """Output of the egress test function."""
+
+    success: bool = Field(description="Whether the request succeeded")
+    status_code: int | None = Field(
+        default=None, description="HTTP status code if successful"
+    )
+    body: str = Field(default="", description="Response body or error message")
+
+
+@fn()
+async def test_egress(payload: EgressTestRequest) -> EgressTestResponse:
+    """Test outbound HTTP connectivity by fetching a URL.
+
+    Useful for verifying network egress controls. When network.egress is
+    configured, this request will be blocked unless the target domain is
+    in allow_domains.
+    """
+    print(f"Testing egress to: {payload.url}")
+    try:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=10)
+        ) as session:
+            async with session.get(payload.url) as resp:
+                body = await resp.text()
+                print(f"Response: {resp.status} ({len(body)} bytes)")
+                return EgressTestResponse(
+                    success=True,
+                    status_code=resp.status,
+                    body=body[:1000],
+                )
+    except Exception as e:
+        print(f"Request failed: {type(e).__name__}: {e}")
+        return EgressTestResponse(
+            success=False,
+            body=f"{type(e).__name__}: {e}",
+        )

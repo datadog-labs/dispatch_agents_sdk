@@ -1,2 +1,2 @@
 ## Features
-- Added `get_github_app_token()` to the SDK's GitHub integration module, enabling GitHub App-based authentication for agents that interact with GitHub APIs.
+- Added network egress controls for LocalStack environments, enabling configuration of outbound network policies for agents running in local development and testing contexts.
