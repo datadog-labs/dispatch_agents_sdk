@@ -38,6 +38,7 @@ async def get_github_app_token() -> GitHubAppToken:
         RuntimeError: If DISPATCH_API_KEY environment variable is not set.
         RuntimeError: If no GitHub installation is configured for this org (404).
         RuntimeError: If authentication fails — check DISPATCH_API_KEY (401).
+        RuntimeError: If access is forbidden (403).
         RuntimeError: If the backend returns an unexpected HTTP status code.
 
     Note:
@@ -76,7 +77,7 @@ async def get_github_app_token() -> GitHubAppToken:
     if not os.getenv("DISPATCH_API_KEY"):
         raise RuntimeError(
             "DISPATCH_API_KEY environment variable is not set. "
-            "GitHub installation token requires authentication with the Dispatch backend."
+            "GitHub installation token requires an authenticated Dispatch agent."
         )
 
     if _cached_token is not None:
@@ -96,6 +97,8 @@ async def get_github_app_token() -> GitHubAppToken:
             "GitHub installation token request failed: unauthorized. "
             "Check that DISPATCH_API_KEY is valid."
         )
+    if response.status_code == 403:
+        raise RuntimeError("GitHub installation token request failed: forbidden.")
     if response.status_code == 404:
         raise RuntimeError(
             "No GitHub installation found for this organization. "

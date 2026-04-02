@@ -3,15 +3,15 @@ revision = 3
 requires-python = ">=3.11"
 
 [options]
-exclude-newer = "2026-02-28T15:12:16.136865Z"
+exclude-newer = "2026-03-03T20:09:23.684706Z"
 exclude-newer-span = "P30D"
 
 [options.exclude-newer-package]
-dispatch-agents = { timestamp = "2026-03-30T15:12:16.136874Z", span = "PT0S" }
-claude-agent-sdk = { timestamp = "2026-03-16T15:12:16.136882Z", span = "P14D" }
-openai = { timestamp = "2026-03-16T15:12:16.136883Z", span = "P14D" }
-langchain-openai = { timestamp = "2026-03-16T15:12:16.136885Z", span = "P14D" }
-openai-agents = { timestamp = "2026-03-16T15:12:16.136884Z", span = "P14D" }
+dispatch-agents = { timestamp = "2026-04-02T20:09:23.684712Z", span = "PT0S" }
+claude-agent-sdk = { timestamp = "2026-03-19T20:09:23.684719Z", span = "P14D" }
+openai = { timestamp = "2026-03-19T20:09:23.684719Z", span = "P14D" }
+langchain-openai = { timestamp = "2026-03-19T20:09:23.68472Z", span = "P14D" }
+openai-agents = { timestamp = "2026-03-19T20:09:23.684719Z", span = "P14D" }
 
 [[package]]
 name = "aiohappyeyeballs"
@@ -551,7 +551,7 @@ wheels = [
 
 [[package]]
 name = "dispatch-agents"
-version = "0.11.0"
+version = "0.12.2"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },

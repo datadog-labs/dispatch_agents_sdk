@@ -4,7 +4,10 @@ import pytest
 
 from dispatch_agents.config import (
     DispatchConfig,
+    DomainSelector,
+    EgressConfig,
     MCPServerConfig,
+    NetworkConfig,
     ResourceConfig,
     ResourceLimits,
     SecretConfig,
@@ -510,3 +513,207 @@ class TestVolumeMode:
     def test_string_comparison(self):
         """Should compare as string."""
         assert VolumeMode.READ_WRITE_MANY == "read_write_many"
+
+
+class TestDomainSelector:
+    """Tests for DomainSelector model."""
+
+    def test_valid_match_name(self):
+        """Should accept exact FQDN via matchName."""
+        ds = DomainSelector(match_name="api.openai.com")
+        assert ds.match_name == "api.openai.com"
+        assert ds.match_pattern is None
+
+    def test_valid_match_pattern(self):
+        """Should accept wildcard via matchPattern."""
+        ds = DomainSelector(match_pattern="*.github.com")
+        assert ds.match_pattern == "*.github.com"
+        assert ds.match_name is None
+
+    def test_rejects_both_fields(self):
+        """Should reject when both matchName and matchPattern are set."""
+        with pytest.raises(ValueError, match="not both"):
+            DomainSelector(match_name="api.openai.com", match_pattern="*.github.com")
+
+    def test_rejects_neither_field(self):
+        """Should reject when neither field is set."""
+        with pytest.raises(ValueError, match="must be set"):
+            DomainSelector()
+
+    def test_rejects_invalid_match_name(self):
+        """Should reject invalid domain in matchName."""
+        with pytest.raises(ValueError, match="Invalid domain"):
+            DomainSelector(match_name="https://api.openai.com")
+
+    def test_rejects_invalid_match_pattern(self):
+        """Should reject invalid pattern in matchPattern."""
+        with pytest.raises(ValueError, match="Invalid domain"):
+            DomainSelector(match_pattern="*")
+
+    def test_model_dump_excludes_none(self):
+        """Should produce clean dict when dumped with exclude_none."""
+        ds = DomainSelector(match_name="api.openai.com")
+        assert ds.model_dump(exclude_none=True) == {"match_name": "api.openai.com"}
+
+
+class TestEgressConfig:
+    """Tests for EgressConfig model and validators."""
+
+    def test_empty_allow_domains(self):
+        """Should accept empty allow_domains list."""
+        config = EgressConfig()
+        assert config.allow_domains == []
+
+    def test_valid_exact_domain(self):
+        """Should accept exact FQDNs via matchName."""
+        config = EgressConfig(
+            allow_domains=[DomainSelector(match_name="api.openai.com")]
+        )
+        assert config.allow_domains[0].match_name == "api.openai.com"
+
+    def test_valid_wildcard_domain(self):
+        """Should accept wildcard prefixes via matchPattern."""
+        config = EgressConfig(
+            allow_domains=[DomainSelector(match_pattern="*.github.com")]
+        )
+        assert config.allow_domains[0].match_pattern == "*.github.com"
+
+    def test_valid_multiple_domains(self):
+        """Should accept multiple valid domains."""
+        domains = [
+            DomainSelector(match_name="api.openai.com"),
+            DomainSelector(match_pattern="*.github.com"),
+            DomainSelector(match_name="httpbin.org"),
+        ]
+        config = EgressConfig(allow_domains=domains)
+        assert len(config.allow_domains) == 3
+
+    def test_rejects_url_with_scheme(self):
+        """Should reject domains with URL schemes."""
+        with pytest.raises(ValueError, match="Invalid domain"):
+            EgressConfig(
+                allow_domains=[DomainSelector(match_name="https://api.openai.com")]
+            )
+
+    def test_rejects_domain_with_port(self):
+        """Should reject domains with ports."""
+        with pytest.raises(ValueError, match="Invalid domain"):
+            EgressConfig(
+                allow_domains=[DomainSelector(match_name="api.openai.com:443")]
+            )
+
+    def test_rejects_domain_with_path(self):
+        """Should reject domains with paths."""
+        with pytest.raises(ValueError, match="Invalid domain"):
+            EgressConfig(allow_domains=[DomainSelector(match_name="api.openai.com/v1")])
+
+    def test_rejects_ip_address(self):
+        """Should reject IP addresses."""
+        with pytest.raises(ValueError, match="Invalid domain"):
+            EgressConfig(allow_domains=[DomainSelector(match_name="192.168.1.1")])
+
+    def test_rejects_bare_wildcard(self):
+        """Should reject bare wildcard."""
+        with pytest.raises(ValueError, match="Invalid domain"):
+            EgressConfig(allow_domains=[DomainSelector(match_pattern="*")])
+
+    def test_rejects_wildcard_tld(self):
+        """Should reject wildcard on TLD only."""
+        with pytest.raises(ValueError, match="Invalid domain"):
+            EgressConfig(allow_domains=[DomainSelector(match_pattern="*.com")])
+
+    def test_rejects_too_many_domains(self):
+        """Should reject more than 50 entries."""
+        domains = [
+            DomainSelector(match_name=f"domain{i}.example.com") for i in range(51)
+        ]
+        with pytest.raises(ValueError, match="cannot have more than 50"):
+            EgressConfig(allow_domains=domains)
+
+    def test_accepts_50_domains(self):
+        """Should accept exactly 50 entries."""
+        domains = [
+            DomainSelector(match_name=f"domain{i}.example.com") for i in range(50)
+        ]
+        config = EgressConfig(allow_domains=domains)
+        assert len(config.allow_domains) == 50
+
+    def test_rejects_bare_tld(self):
+        """Should reject bare TLD."""
+        with pytest.raises(ValueError, match="Invalid domain"):
+            EgressConfig(allow_domains=[DomainSelector(match_name="com")])
+
+
+class TestNetworkConfig:
+    """Tests for NetworkConfig model."""
+
+    def test_default_egress(self):
+        """Should default to empty allow_domains."""
+        config = NetworkConfig()
+        assert config.egress.allow_domains == []
+
+    def test_custom_egress(self):
+        """Should accept custom egress config."""
+        config = NetworkConfig(
+            egress=EgressConfig(
+                allow_domains=[DomainSelector(match_name="api.openai.com")]
+            )
+        )
+        assert config.egress.allow_domains[0].match_name == "api.openai.com"
+
+
+class TestDispatchConfigNetwork:
+    """Tests for network field on DispatchConfig."""
+
+    def test_network_none_by_default(self):
+        """Should default to None (no restrictions)."""
+        config = DispatchConfig()
+        assert config.network is None
+
+    def test_network_with_egress(self):
+        """Should accept network config with egress."""
+        config = DispatchConfig(
+            network=NetworkConfig(
+                egress=EgressConfig(
+                    allow_domains=[DomainSelector(match_name="api.openai.com")]
+                )
+            )
+        )
+        assert config.network is not None
+        assert config.network.egress.allow_domains[0].match_name == "api.openai.com"
+
+    def test_to_yaml_dict_includes_network(self):
+        """Should include network in YAML serialization when set."""
+        config = DispatchConfig(
+            network=NetworkConfig(
+                egress=EgressConfig(
+                    allow_domains=[
+                        DomainSelector(match_name="api.openai.com"),
+                        DomainSelector(match_pattern="*.github.com"),
+                    ]
+                )
+            )
+        )
+        result = config.to_yaml_dict()
+        assert "network" in result
+        assert result["network"] == {
+            "egress": {
+                "allow_domains": [
+                    {"match_name": "api.openai.com"},
+                    {"match_pattern": "*.github.com"},
+                ],
+            }
+        }
+
+    def test_to_yaml_dict_includes_network_empty_domains(self):
+        """Should include network even with empty allow_domains (triggers policy creation)."""
+        config = DispatchConfig(network=NetworkConfig())
+        result = config.to_yaml_dict()
+        assert "network" in result
+        assert result["network"] == {"egress": {"allow_domains": []}}
+
+    def test_to_yaml_dict_excludes_network_when_none(self):
+        """Should not include network when None."""
+        config = DispatchConfig()
+        result = config.to_yaml_dict()
+        assert "network" not in result

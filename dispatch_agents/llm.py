@@ -470,7 +470,17 @@ class LLMClient:
                 headers=auth_headers,
                 timeout=600.0,  # 10min — matches ALB idle timeout for long-context LLM calls
             )
-            response.raise_for_status()
+            if response.status_code >= 400:
+                try:
+                    error_body = response.json()
+                    detail = error_body.get("detail", response.text)
+                except Exception:
+                    detail = response.text
+                raise httpx.HTTPStatusError(
+                    f"LLM inference failed ({response.status_code}): {detail}",
+                    request=response.request,
+                    response=response,
+                )
             data = response.json()
 
         # Parse tool calls if present

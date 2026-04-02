@@ -1054,6 +1054,10 @@ class TestPassthroughRoute:
         resp = client.get("/openai/v1/models")
         assert resp.status_code == 200
 
+        # Verify provider_format is sent in the payload
+        payload = mock_client.post.call_args.kwargs["json"]
+        assert payload["provider_format"] == "openai"
+
     @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
     def test_anthropic_passthrough_get(self, mock_client_cls, client):
         """GET /anthropic/v1/models goes through passthrough."""
@@ -1070,6 +1074,10 @@ class TestPassthroughRoute:
 
         resp = client.get("/anthropic/v1/models")
         assert resp.status_code == 200
+
+        # Verify provider_format is sent in the payload
+        payload = mock_client.post.call_args.kwargs["json"]
+        assert payload["provider_format"] == "anthropic"
 
 
 # ── Auth Error Detection ─────────────────────────────────────────────

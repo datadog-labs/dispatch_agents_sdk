@@ -764,7 +764,7 @@ async def _call_provider_directly_streaming(
 ) -> Response:
     """Call the LLM provider directly with streaming (fallback when backend has no config).
 
-    Uses raw httpx streaming (not litellm) since litellm is not available in the SDK.
+    Uses raw httpx streaming.
     Buffers SSE events for usage extraction and logs to /llm/log after stream completes.
     """
 
@@ -947,10 +947,10 @@ async def _proxy_passthrough(request: Request, provider_format: str) -> Response
         )
 
     # Build passthrough request for backend.
-    # provider_format is no longer sent; the backend derives it from path.
     backend_payload: dict[str, Any] = {
         "path": path,
         "method": method,
+        "provider_format": provider_format,
     }
     if body_dict is not None:
         backend_payload["body"] = body_dict
