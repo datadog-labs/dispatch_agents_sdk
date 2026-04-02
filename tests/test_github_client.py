@@ -213,6 +213,7 @@ async def test_normalizes_naive_expiry_timestamp(monkeypatch):
     ("status_code", "expected_message"),
     [
         (401, "DISPATCH_API_KEY"),
+        (403, "request failed: forbidden"),
         (404, "No GitHub installation found"),
         (500, "backend returned HTTP 500"),
     ],

@@ -5,6 +5,7 @@ shared between CLI and backend.
 """
 
 import os
+import re
 from enum import StrEnum
 from typing import Any
 
@@ -23,6 +24,13 @@ RESERVED_ENV_VARS: frozenset[str] = frozenset(
         "MCP_CONFIG_JSON",
         "MCP_GATEWAY_URL",
     }
+)
+
+# Domain validation pattern for egress allow list.
+# Accepts exact FQDNs (api.openai.com) and wildcard prefixes (*.github.com).
+# Rejects URLs with schemes/ports/paths, IP addresses, and bare wildcards.
+_DOMAIN_PATTERN = re.compile(
+    r"^(\*\.)?([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$"
 )
 
 
@@ -322,6 +330,98 @@ class ResourceConfig(BaseModel):
     )
 
 
+class DomainSelector(BaseModel):
+    """A single domain selector -- exactly one of match_name or match_pattern.
+
+    match_name is an exact FQDN (e.g. api.openai.com).
+    match_pattern is a wildcard prefix (e.g. *.github.com).
+
+    Serialises with camelCase aliases (matchName / matchPattern) to match the
+    downstream Cilium FQDN selector API.
+    """
+
+    match_name: str | None = Field(
+        default=None,
+        description="Exact FQDN to allow. Must match the entire domain name exactly "
+        "(e.g. 'api.openai.com' matches only 'api.openai.com').",
+    )
+    match_pattern: str | None = Field(
+        default=None,
+        description="Wildcard pattern to allow. Uses '*.domain.com' syntax to match "
+        "any subdomain of the specified domain (e.g. '*.github.com' matches "
+        "'api.github.com' and 'raw.github.com' but not 'github.com' itself).",
+    )
+
+    @model_validator(mode="after")
+    def _validate_exactly_one_field(self) -> "DomainSelector":
+        if self.match_name and self.match_pattern:
+            raise ValueError(
+                "Exactly one of match_name or match_pattern must be set, not both"
+            )
+        if not self.match_name and not self.match_pattern:
+            raise ValueError("Exactly one of match_name or match_pattern must be set")
+        domain = self.match_name or self.match_pattern or ""
+        if not _DOMAIN_PATTERN.match(domain):
+            raise ValueError(
+                f"Invalid domain '{domain}'. "
+                "Must be an exact FQDN (e.g., api.openai.com) "
+                "or wildcard prefix (e.g., *.github.com). "
+                "URL schemes, ports, paths, IP addresses, "
+                "and bare wildcards are not allowed."
+            )
+        return self
+
+    model_config = {"extra": "forbid"}
+
+
+class EgressConfig(BaseModel):
+    """Configuration for network egress allow list.
+
+    Domains are specified as objects with either matchName (exact FQDN)
+    or matchPattern (wildcard prefix). This is a subset of the
+    downstream Cilium FQDN selector API.
+
+    Example:
+        network:
+          egress:
+            allow_domains:
+              - match_name: api.openai.com
+              - match_pattern: "*.github.com"
+    """
+
+    allow_domains: list[DomainSelector] = Field(
+        default_factory=list,
+        description="Domains allowed for egress as Cilium FQDN selectors.",
+    )
+
+    @field_validator("allow_domains")
+    @classmethod
+    def _validate_allow_domains(cls, v: list[DomainSelector]) -> list[DomainSelector]:
+        if len(v) > 50:
+            raise ValueError(
+                f"allow_domains cannot have more than 50 entries, got {len(v)}"
+            )
+        return v
+
+
+class NetworkConfig(BaseModel):
+    """Network configuration for an agent.
+
+    When present in dispatch.yaml, CiliumNetworkPolicies are created to
+    restrict the agent's outbound traffic to platform services and any
+    listed allow_domains.  When absent, all egress is unrestricted.
+
+    Example:
+        network:
+          egress:
+            allow_domains:
+              - match_name: api.openai.com
+              - match_pattern: "*.github.com"
+    """
+
+    egress: EgressConfig = Field(default_factory=EgressConfig)
+
+
 class DispatchConfig(BaseModel):
     """Configuration model for dispatch.yaml files.
 
@@ -416,6 +516,10 @@ class DispatchConfig(BaseModel):
         default_factory=ResourceConfig,
         description="Container resource limits (CPU and memory)",
     )
+    network: NetworkConfig | None = Field(
+        default=None,
+        description="Network egress restrictions. When set, CiliumNetworkPolicies restrict outbound traffic.",
+    )
 
     @field_validator("env")
     @classmethod
@@ -484,6 +588,16 @@ class DispatchConfig(BaseModel):
             "memory": self.resources.limits.memory,
         }
         result["resources"] = {"limits": limits_dict}
+
+        if self.network is not None:
+            result["network"] = {
+                "egress": {
+                    "allow_domains": [
+                        d.model_dump(exclude_none=True)
+                        for d in self.network.egress.allow_domains
+                    ],
+                }
+            }
 
         return result
 
