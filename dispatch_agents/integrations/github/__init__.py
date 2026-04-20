@@ -83,9 +83,9 @@ GitHub Topics:
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, Literal, Self
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, StrictInt, model_validator
 
 from dispatch_agents.events import BasePayload
 from dispatch_agents.integrations.github.client import GitHubAppToken
@@ -209,12 +209,14 @@ class GitHubRepository(GitHubModel):
     description: str | None = Field(default=None, description="Repository description")
     fork: bool = Field(default=False, description="Whether this is a fork")
     url: str | None = Field(default=None, description="API URL")
-    created_at: str | None = Field(
-        default=None, description="ISO8601 creation timestamp"
+    created_at: StrictInt | str | None = Field(
+        default=None,
+        description="Creation timestamp (Unix epoch int or ISO8601 string)",
     )
     updated_at: str | None = Field(default=None, description="ISO8601 update timestamp")
-    pushed_at: str | None = Field(
-        default=None, description="ISO8601 last push timestamp"
+    pushed_at: StrictInt | str | None = Field(
+        default=None,
+        description="Last push timestamp (Unix epoch int or ISO8601 string)",
     )
     homepage: str | None = Field(default=None, description="Homepage URL")
     size: int = Field(default=0, description="Repository size in KB")
@@ -906,20 +908,38 @@ class PullRequestUnassigned(PullRequestBase):
     assignee: GitHubUser = Field(description="User who was unassigned")
 
 
-class PullRequestReviewRequested(PullRequestBase):
+class PullRequestReviewTargetBase(PullRequestBase):
+    """Base payload for pull_request review target events."""
+
+    requested_reviewer: GitHubUser | None = Field(
+        default=None,
+        description="User requested for review (absent when a team is requested)",
+    )
+    requested_team: GitHubTeam | None = Field(
+        default=None,
+        description="Team requested for review (absent when a user is requested)",
+    )
+
+    @model_validator(mode="after")
+    def validate_review_target(self) -> Self:
+        """Require exactly one review target field."""
+        if (self.requested_reviewer is None) == (self.requested_team is None):
+            raise ValueError(
+                "Exactly one of requested_reviewer or requested_team must be provided"
+            )
+        return self
+
+
+class PullRequestReviewRequested(PullRequestReviewTargetBase):
     """Payload for github.pull_request.review_requested events."""
 
     _dispatch_topic: ClassVar[str] = "github.pull_request.review_requested"
-    requested_reviewer: GitHubUser = Field(description="User requested for review")
 
 
-class PullRequestReviewRequestRemoved(PullRequestBase):
+class PullRequestReviewRequestRemoved(PullRequestReviewTargetBase):
     """Payload for github.pull_request.review_request_removed events."""
 
     _dispatch_topic: ClassVar[str] = "github.pull_request.review_request_removed"
-    requested_reviewer: GitHubUser = Field(
-        description="User whose review request was removed"
-    )
 
 
 class PullRequestReadyForReview(PullRequestBase):

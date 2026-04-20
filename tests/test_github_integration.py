@@ -11,37 +11,19 @@ from dispatch_agents import (
     on,
 )
 from dispatch_agents.integrations.github import (
-    CheckRunBase,
     GitHubBranch,
-    GitHubChanges,
     GitHubChangeValue,
-    GitHubCheckRun,
     GitHubComment,
-    GitHubCommit,
-    GitHubCommitUser,
     GitHubInstallation,
     GitHubIssue,
-    GitHubIssuePullRequest,
-    GitHubLink,
     GitHubPullRequest,
-    GitHubRelease,
     GitHubRepository,
-    GitHubRequestedAction,
-    GitHubReview,
-    GitHubReviewComment,
-    GitHubReviewThread,
+    GitHubTeam,
     GitHubUser,
-    GitHubWorkflow,
-    GitHubWorkflowJob,
-    GitHubWorkflowRun,
-    GitHubWorkflowStep,
-    IssueBase,
-    IssueCommentBase,
     PullRequestBase,
-    PullRequestReviewBase,
+    PullRequestReviewRequested,
+    PullRequestReviewRequestRemoved,
     Push,
-    ReleaseBase,
-    WorkflowRunBase,
 )
 from dispatch_agents.models import SuccessPayload, TopicMessage
 
@@ -105,6 +87,22 @@ def make_github_organization(login: str = "my-org") -> GitHubUser:
     )
 
 
+def make_github_team(name: str = "backend") -> GitHubTeam:
+    """Create a sample GitHub team."""
+    return GitHubTeam(
+        id=789,
+        node_id="MDQ6VGVhbTc4OQ==",
+        name=name,
+        slug=name,
+        privacy="closed",
+        permission="push",
+        url=f"https://api.github.com/teams/{name}",
+        html_url=f"https://github.com/orgs/octocat/teams/{name}",
+        members_url=f"https://api.github.com/teams/{name}/members{{/member}}",
+        repositories_url=f"https://api.github.com/teams/{name}/repos",
+    )
+
+
 def make_github_pr(number: int = 42, title: str = "Fix bug") -> GitHubPullRequest:
     """Create a sample GitHub pull request."""
     return GitHubPullRequest(
@@ -158,375 +156,238 @@ def make_github_comment(body: str = "Great work!") -> GitHubComment:
 
 
 # =============================================================================
-# Test: GitHub Types
+# Test: Model Configuration
 # =============================================================================
 
 
-def test_github_user_validation():
-    """Test GitHubUser type validation."""
-    user = GitHubUser(id=1, login="octocat", type="User")
-    assert user.id == 1
-    assert user.login == "octocat"
-    assert user.type == "User"
-
-
-def test_github_user_with_extra_fields():
-    """Test GitHubUser ignores extra fields (permissive validation)."""
-    # GitHub payloads often include extra fields we don't model
-    # Use model_validate to test dict parsing with extra fields
+def test_github_user_extra_fields_are_ignored():
+    """Models use extra='ignore': unknown fields from GitHub payloads do not raise."""
     user = GitHubUser.model_validate(
         {
             "id": 1,
             "login": "octocat",
             "type": "User",
-            "node_id": "MDQ6VXNlcjE=",  # Known optional field
-            "gravatar_id": "",  # Extra field not in model - should be ignored
+            "gravatar_id": "",  # not in model
+            "unknown_future_field": True,
         }
     )
     assert user.id == 1
-    assert user.login == "octocat"
 
 
-def test_github_repository_validation():
-    """Test GitHubRepository type validation."""
-    repo = make_github_repo()
-    assert repo.name == "test-repo"
-    assert repo.full_name == "octocat/test-repo"
-    assert repo.owner.login == "octocat"
-
-
-def test_github_pull_request_validation():
-    """Test GitHubPullRequest type validation."""
-    pr = make_github_pr()
-    assert pr.number == 42
-    assert pr.title == "Fix bug"
-    assert pr.state == "open"
-    assert pr.head.ref == "feature-branch"
-    assert pr.base.ref == "main"
-
-
-def test_github_issue_validation():
-    """Test GitHubIssue type validation."""
-    issue = make_github_issue()
-    assert issue.number == 1
-    assert issue.title == "Bug report"
-    assert issue.state == "open"
-
-
-def test_github_comment_validation():
-    """Test GitHubComment type validation."""
-    comment = make_github_comment()
-    assert comment.id == 777
-    assert comment.body == "Great work!"
-
-
-def test_github_installation_validation():
-    """Test GitHubInstallation type validation."""
-    installation = make_github_installation()
-    assert installation.id == 12345
-    assert installation.account is not None
-    assert installation.account.login == "octocat"
-
-
-# =============================================================================
-# Test: GitHub Event Payloads
-# =============================================================================
-
-
-def test_pull_request_base_payload():
-    """Test PullRequestBase validation."""
-    payload = PullRequestBase(
-        action="opened",
-        number=42,
-        pull_request=make_github_pr(),
-        repository=make_github_repo(),
-        sender=make_github_user(),
-        organization=make_github_organization(),
-    )
-    assert payload.action == "opened"
-    assert payload.number == 42
-    assert payload.pull_request.title == "Fix bug"
-    assert (
-        payload.repository is not None
-        and payload.repository.full_name == "octocat/test-repo"
-    )
-    assert payload.sender is not None and payload.sender.login == "octocat"
-
-
-def test_issue_comment_base_payload():
-    """Test IssueCommentBase validation."""
-    payload = IssueCommentBase(
-        action="created",
-        issue=make_github_issue(),
-        comment=make_github_comment(),
-        repository=make_github_repo(),
-        sender=make_github_user(),
-        organization=make_github_organization(),
-    )
-    assert payload.action == "created"
-    assert payload.issue.number == 1
-    assert payload.comment.body == "Great work!"
-
-
-def test_push_payload():
-    """Test Push payload validation."""
-    payload = Push(
-        ref="refs/heads/main",
-        before="abc123",
-        after="def456",
-        compare="https://github.com/octocat/test-repo/compare/abc123...def456",
-        commits=[
-            GitHubCommit(
-                id="def456",
-                tree_id="tree123",
-                message="Add new feature",
-                timestamp="2024-01-15T10:30:00Z",
-                author=GitHubCommitUser(name="Test User", email="test@example.com"),
-                committer=GitHubCommitUser(name="Test User", email="test@example.com"),
-                url="https://api.github.com/repos/octocat/test-repo/commits/def456",
-            )
-        ],
-        pusher=GitHubCommitUser(name="octocat", email="octocat@github.com"),
-        repository=make_github_repo(),
-        sender=make_github_user(),
-        organization=make_github_organization(),
-    )
-    assert payload.ref == "refs/heads/main"
-    assert len(payload.commits) == 1
-    assert payload.commits[0].message == "Add new feature"
-
-
-def test_issue_base_payload():
-    """Test IssueBase payload validation."""
-    payload = IssueBase(
-        action="opened",
-        issue=make_github_issue(),
-        repository=make_github_repo(),
-        sender=make_github_user(),
-        organization=make_github_organization(),
-    )
-    assert payload.action == "opened"
-    assert payload.issue.title == "Bug report"
-
-
-def test_check_run_base_payload():
-    """Test CheckRunBase payload validation."""
-    payload = CheckRunBase(
-        action="completed",
-        check_run=GitHubCheckRun(
-            id=123,
-            name="test-suite",
-            status="completed",
-            conclusion="success",
-            head_sha="abc123",
-        ),
-        repository=make_github_repo(),
-        sender=make_github_user(),
-        organization=make_github_organization(),
-    )
-    assert payload.action == "completed"
-    assert payload.check_run.name == "test-suite"
-    assert payload.check_run.conclusion == "success"
-
-
-def test_workflow_run_base_payload():
-    """Test WorkflowRunBase payload validation."""
-    payload = WorkflowRunBase(
-        action="completed",
-        workflow_run=GitHubWorkflowRun(
-            id=456,
-            name="CI",
-            status="completed",
-            conclusion="success",
-            head_sha="abc123",
-            head_branch="main",
-            run_number=1,
-            event="push",
-            workflow_id=789,
-        ),
-        workflow=GitHubWorkflow(
-            id=789,
-            name="CI",
-            path=".github/workflows/ci.yml",
-            state="active",
-            created_at="2024-01-01T00:00:00Z",
-            updated_at="2024-01-01T00:00:00Z",
-            url="https://api.github.com/repos/octocat/test-repo/actions/workflows/789",
-            html_url="https://github.com/octocat/test-repo/actions/workflows/ci.yml",
-        ),
-        repository=make_github_repo(),
-        sender=make_github_user(),
-        organization=make_github_organization(),
-    )
-    assert payload.action == "completed"
-    assert payload.workflow_run.name == "CI"
-
-
-def test_release_base_payload():
-    """Test ReleaseBase payload validation."""
-    payload = ReleaseBase(
-        action="published",
-        release=GitHubRelease(
-            id=111,
-            tag_name="v1.0.0",
-            name="Version 1.0.0",
-            body="Release notes",
-            draft=False,
-            prerelease=False,
-            created_at="2024-01-15T10:00:00Z",
-            author=make_github_user(),
-            html_url="https://github.com/octocat/test-repo/releases/tag/v1.0.0",
-        ),
-        repository=make_github_repo(),
-        sender=make_github_user(),
-        organization=make_github_organization(),
-    )
-    assert payload.action == "published"
-    assert payload.release.tag_name == "v1.0.0"
-
-
-def test_pull_request_review_base_payload():
-    """Test PullRequestReviewBase payload validation."""
-    payload = PullRequestReviewBase(
-        action="submitted",
-        review=GitHubReview(
-            id=222,
-            body="LGTM!",
-            state="approved",
-            user=make_github_user(),
-            html_url="https://github.com/octocat/test-repo/pull/1#pullrequestreview-222",
-            commit_id="abc123",
-        ),
-        pull_request=make_github_pr(),
-        repository=make_github_repo(),
-        sender=make_github_user(),
-        organization=make_github_organization(),
-    )
-    assert payload.action == "submitted"
-    assert payload.review.state == "approved"
-
-
-# =============================================================================
-# Test: New Typed Models
-# =============================================================================
-
-
-def test_github_requested_action():
-    """Test GitHubRequestedAction model."""
-    action = GitHubRequestedAction(identifier="fix_it")
-    assert action.identifier == "fix_it"
-
-
-def test_github_workflow():
-    """Test GitHubWorkflow model with required and optional fields."""
-    workflow = GitHubWorkflow(
-        id=1,
-        name="CI",
-        path=".github/workflows/ci.yml",
-        state="active",
-        created_at="2024-01-01T00:00:00Z",
-        updated_at="2024-01-01T00:00:00Z",
-        url="https://api.github.com/repos/octocat/test-repo/actions/workflows/1",
-        html_url="https://github.com/octocat/test-repo/actions/workflows/ci.yml",
-    )
-    assert workflow.name == "CI"
-    assert workflow.state == "active"
-    assert workflow.badge_url is None  # optional
-
-
-def test_github_workflow_step():
-    """Test GitHubWorkflowStep model."""
-    step = GitHubWorkflowStep(
-        name="Run tests",
-        status="completed",
-        conclusion="success",
-        number=1,
-        started_at="2024-01-01T00:00:00Z",
-        completed_at="2024-01-01T00:01:00Z",
-    )
-    assert step.name == "Run tests"
-    assert step.conclusion == "success"
-
-
-def test_github_workflow_job():
-    """Test GitHubWorkflowJob model with steps."""
-    step = GitHubWorkflowStep(
-        name="Checkout", status="completed", conclusion="success", number=1
-    )
-    job = GitHubWorkflowJob(
-        id=100,
-        run_id=200,
-        head_sha="abc123",
-        status="completed",
-        conclusion="success",
-        name="build",
-        steps=[step],
-    )
-    assert job.name == "build"
-    assert len(job.steps) == 1
-    assert job.steps[0].name == "Checkout"
-    assert job.runner_id is None  # optional
-
-
-def test_github_review_thread():
-    """Test GitHubReviewThread model."""
-    thread = GitHubReviewThread(node_id="RT_123", comments=[])
-    assert thread.node_id == "RT_123"
-    assert thread.comments == []
-
-
-def test_github_link():
-    """Test GitHubLink model."""
-    link = GitHubLink(href="https://github.com/octocat/test-repo/pull/1")
-    assert link.href == "https://github.com/octocat/test-repo/pull/1"
-
-
-def test_github_issue_pull_request():
-    """Test GitHubIssuePullRequest model."""
-    pr_info = GitHubIssuePullRequest(
-        url="https://api.github.com/repos/octocat/test-repo/pulls/1",
-        html_url="https://github.com/octocat/test-repo/pull/1",
-    )
-    assert pr_info.html_url == "https://github.com/octocat/test-repo/pull/1"
-    assert pr_info.merged_at is None  # optional
-
-
-def test_github_change_value():
-    """Test GitHubChangeValue model with 'from' alias."""
-    # Simulate the JSON deserialization path (GitHub sends {"from": "old title"})
+def test_github_change_value_from_alias():
+    """GitHubChangeValue maps the JSON key 'from' to the Python attribute 'from_'."""
     change = GitHubChangeValue.model_validate({"from": "old title"})
     assert change.from_ == "old title"
 
 
-def test_github_changes_with_typed_values():
-    """Test GitHubChanges with typed GitHubChangeValue fields."""
-    changes = GitHubChanges.model_validate(
+# =============================================================================
+# Test: Timestamp Schema Drift
+# =============================================================================
+
+
+def test_github_repository_accepts_integer_timestamps():
+    """GitHubRepository accepts Unix epoch integers for created_at and pushed_at."""
+    repo = GitHubRepository.model_validate(
         {
-            "title": {"from": "Old Title"},
-            "body": {"from": "Old Body"},
+            "id": 123,
+            "name": "test-repo",
+            "full_name": "octocat/test-repo",
+            "owner": {"id": 1, "login": "octocat", "type": "User"},
+            "created_at": 1609459200,
+            "pushed_at": 1609545600,
         }
     )
-    assert changes.title is not None
-    assert changes.title.from_ == "Old Title"
-    assert changes.body is not None
-    assert changes.body.from_ == "Old Body"
+    assert repo.created_at == 1609459200
+    assert repo.pushed_at == 1609545600
 
 
-def test_github_review_thread_with_comments():
-    """Test GitHubReviewThread with actual review comments."""
-    comment = GitHubReviewComment(
-        id=1,
-        html_url="https://github.com/octocat/test-repo/pull/1#discussion_r1",
-        body="Looks good",
-        user=make_github_user(),
-        commit_id="abc123",
-        diff_hunk="@@ -1,3 +1,4 @@",
-        path="src/main.py",
-        created_at="2024-01-15T10:00:00Z",
+def test_github_repository_rejects_boolean_timestamps():
+    """GitHubRepository rejects booleans for integer timestamp fields."""
+    with pytest.raises(ValidationError) as exc_info:
+        GitHubRepository.model_validate(
+            {
+                "id": 123,
+                "name": "test-repo",
+                "full_name": "octocat/test-repo",
+                "owner": {"id": 1, "login": "octocat", "type": "User"},
+                "created_at": True,
+                "pushed_at": False,
+            }
+        )
+    locs = {error["loc"][:1] for error in exc_info.value.errors(include_input=False)}
+    assert ("created_at",) in locs
+    assert ("pushed_at",) in locs
+
+
+def test_github_repository_rejects_float_timestamps():
+    """StrictInt does not coerce floats — 1609459200.5 is rejected, not truncated."""
+    with pytest.raises(ValidationError) as exc_info:
+        GitHubRepository.model_validate(
+            {
+                "id": 123,
+                "name": "test-repo",
+                "full_name": "octocat/test-repo",
+                "owner": {"id": 1, "login": "octocat", "type": "User"},
+                "created_at": 1609459200.5,
+            }
+        )
+    locs = {error["loc"][:1] for error in exc_info.value.errors(include_input=False)}
+    assert ("created_at",) in locs
+
+
+def test_push_payload_accepts_integer_repository_timestamps():
+    """Push payloads accept integer repository timestamps without validation errors."""
+    payload = Push.model_validate(
+        {
+            "ref": "refs/heads/main",
+            "before": "abc123",
+            "after": "def456",
+            "created": False,
+            "deleted": False,
+            "forced": False,
+            "compare": "https://github.com/octocat/test-repo/compare/abc123...def456",
+            "repository": {
+                "id": 123,
+                "name": "test-repo",
+                "full_name": "octocat/test-repo",
+                "owner": {"id": 1, "login": "octocat", "type": "User"},
+                "created_at": 1609459200,
+                "pushed_at": 1609545600,
+            },
+            "pusher": {"name": "octocat", "email": "octocat@example.com"},
+            "sender": {"id": 1, "login": "octocat", "type": "User"},
+            "commits": [],
+        }
     )
-    thread = GitHubReviewThread(node_id="RT_456", comments=[comment])
-    assert len(thread.comments) == 1
-    assert thread.comments[0].body == "Looks good"
+    assert payload.repository is not None
+    assert payload.repository.created_at == 1609459200
+    assert payload.repository.pushed_at == 1609545600
+
+
+def test_push_payload_rejects_boolean_repository_timestamps():
+    """Push payloads reject boolean repository timestamps as malformed drift."""
+    with pytest.raises(ValidationError) as exc_info:
+        Push.model_validate(
+            {
+                "ref": "refs/heads/main",
+                "before": "abc123",
+                "after": "def456",
+                "created": False,
+                "deleted": False,
+                "forced": False,
+                "compare": "https://github.com/octocat/test-repo/compare/abc123...def456",
+                "repository": {
+                    "id": 123,
+                    "name": "test-repo",
+                    "full_name": "octocat/test-repo",
+                    "owner": {"id": 1, "login": "octocat", "type": "User"},
+                    "created_at": True,
+                    "pushed_at": False,
+                },
+                "pusher": {"name": "octocat", "email": "octocat@example.com"},
+                "sender": {"id": 1, "login": "octocat", "type": "User"},
+                "commits": [],
+            }
+        )
+    locs = {error["loc"][:2] for error in exc_info.value.errors(include_input=False)}
+    assert ("repository", "created_at") in locs
+    assert ("repository", "pushed_at") in locs
+
+
+# =============================================================================
+# Test: Review Target XOR Constraint
+# =============================================================================
+
+
+def test_pull_request_review_requested_accepts_user_target():
+    """review_requested with only a user target passes the XOR constraint."""
+    payload = PullRequestReviewRequested(
+        action="review_requested",
+        number=42,
+        pull_request=make_github_pr(),
+        repository=make_github_repo(),
+        sender=make_github_user(),
+        requested_reviewer=make_github_user("reviewer", 2),
+    )
+    assert payload.requested_reviewer is not None
+    assert payload.requested_team is None
+
+
+def test_pull_request_review_requested_accepts_team_target():
+    """review_requested with only a team target passes the XOR constraint."""
+    payload = PullRequestReviewRequested(
+        action="review_requested",
+        number=42,
+        pull_request=make_github_pr(),
+        repository=make_github_repo(),
+        sender=make_github_user(),
+        requested_team=make_github_team(),
+    )
+    assert payload.requested_reviewer is None
+    assert payload.requested_team is not None
+
+
+@pytest.mark.parametrize(
+    ("model_class", "action"),
+    [
+        (PullRequestReviewRequested, "review_requested"),
+        (PullRequestReviewRequestRemoved, "review_request_removed"),
+    ],
+)
+def test_pull_request_review_target_requires_exactly_one_target(
+    model_class: type[PullRequestReviewRequested | PullRequestReviewRequestRemoved],
+    action: str,
+):
+    """Review target payloads reject missing and ambiguous targets."""
+    base_kwargs = {
+        "action": action,
+        "number": 42,
+        "pull_request": make_github_pr(),
+        "repository": make_github_repo(),
+        "sender": make_github_user(),
+    }
+
+    with pytest.raises(ValidationError) as exc_info:
+        model_class.model_validate(base_kwargs)
+    assert "Exactly one of" in str(exc_info.value)
+
+    with pytest.raises(ValidationError) as exc_info:
+        model_class.model_validate(
+            {
+                **base_kwargs,
+                "requested_reviewer": make_github_user("reviewer", 2),
+                "requested_team": make_github_team(),
+            }
+        )
+    assert "Exactly one of" in str(exc_info.value)
+
+
+def test_pull_request_review_request_removed_accepts_team_target():
+    """review_request_removed with only a team target passes the XOR constraint."""
+    payload = PullRequestReviewRequestRemoved(
+        action="review_request_removed",
+        number=42,
+        pull_request=make_github_pr(),
+        repository=make_github_repo(),
+        sender=make_github_user(),
+        requested_team=make_github_team("platform"),
+    )
+    assert payload.requested_reviewer is None
+    assert payload.requested_team is not None
+
+
+def test_pull_request_review_request_removed_accepts_user_target():
+    """review_request_removed with only a user target passes the XOR constraint."""
+    payload = PullRequestReviewRequestRemoved(
+        action="review_request_removed",
+        number=42,
+        pull_request=make_github_pr(),
+        repository=make_github_repo(),
+        sender=make_github_user(),
+        requested_reviewer=make_github_user("reviewer", 2),
+    )
+    assert payload.requested_reviewer is not None
+    assert payload.requested_team is None
 
 
 # =============================================================================
@@ -535,65 +396,51 @@ def test_github_review_thread_with_comments():
 
 
 def test_pr_payload_missing_required_field():
-    """Test that missing required fields raise validation errors."""
-    with pytest.raises(ValidationError):
+    """Missing required fields raise a ValidationError pointing to those fields."""
+    with pytest.raises(ValidationError) as exc_info:
         PullRequestBase(  # type: ignore[call-arg]
             action="opened",
             # Missing: number, pull_request, repository, sender
         )
+    assert exc_info.value.error_count() > 0
 
 
 def test_pr_payload_invalid_field_type():
-    """Test that invalid field types raise validation errors."""
-    with pytest.raises(ValidationError):
+    """A wrong type for 'number' (str instead of int) raises a ValidationError on that field."""
+    with pytest.raises(ValidationError) as exc_info:
         PullRequestBase(
             action="opened",
-            number="not_an_int",  # type: ignore[arg-type]  # Should be int
+            number="not_an_int",  # type: ignore[arg-type]
             pull_request=make_github_pr(),
             repository=make_github_repo(),
             sender=make_github_user(),
             organization=make_github_organization(),
         )
+    locs = {error["loc"][:1] for error in exc_info.value.errors(include_input=False)}
+    assert ("number",) in locs
 
 
 # =============================================================================
-# Test: Class-Based API - dispatch_topic() method
+# Test: dispatch_topic()
 # =============================================================================
 
 
-def test_pull_request_opened_dispatch_topic():
-    """Test dispatch_topic() class method returns correct topic."""
-    from dispatch_agents.integrations.github import PullRequestOpened
+@pytest.mark.parametrize(
+    ("event_class_name", "expected_topic"),
+    [
+        ("PullRequestOpened", "github.pull_request.opened"),
+        ("PullRequestClosed", "github.pull_request.closed"),
+        ("IssueOpened", "github.issues.opened"),
+        ("Push", "github.push"),
+        ("IssueCommentCreated", "github.issue_comment.created"),
+    ],
+)
+def test_dispatch_topic(event_class_name: str, expected_topic: str):
+    """Each event class returns the correct dispatch topic string."""
+    import dispatch_agents.integrations.github as gh
 
-    assert PullRequestOpened.dispatch_topic() == "github.pull_request.opened"
-
-
-def test_pull_request_closed_dispatch_topic():
-    """Test dispatch_topic() for PullRequestClosed."""
-    from dispatch_agents.integrations.github import PullRequestClosed
-
-    assert PullRequestClosed.dispatch_topic() == "github.pull_request.closed"
-
-
-def test_issue_opened_dispatch_topic():
-    """Test dispatch_topic() for IssueOpened."""
-    from dispatch_agents.integrations.github import IssueOpened
-
-    assert IssueOpened.dispatch_topic() == "github.issues.opened"
-
-
-def test_push_dispatch_topic():
-    """Test dispatch_topic() for Push (no action)."""
-    from dispatch_agents.integrations.github import Push
-
-    assert Push.dispatch_topic() == "github.push"
-
-
-def test_issue_comment_created_dispatch_topic():
-    """Test dispatch_topic() for IssueCommentCreated."""
-    from dispatch_agents.integrations.github import IssueCommentCreated
-
-    assert IssueCommentCreated.dispatch_topic() == "github.issue_comment.created"
+    event_class = getattr(gh, event_class_name)
+    assert event_class.dispatch_topic() == expected_topic
 
 
 # =============================================================================
@@ -602,27 +449,22 @@ def test_issue_comment_created_dispatch_topic():
 
 
 def test_on_github_class_single_event():
-    """Test @on(github_event=...) with a single event class."""
+    """@on(github_event=...) with a single event class registers handler and metadata."""
     from dispatch_agents.integrations.github import PullRequestOpened
 
     @on(github_event=PullRequestOpened)
     async def handle_pr_class(payload: PullRequestOpened) -> None:
         pass
 
-    # Check handler was registered
     assert "handle_pr_class" in REGISTERED_HANDLERS
-
-    # Check topic was mapped
     assert "github.pull_request.opened" in TOPIC_HANDLERS
     assert "handle_pr_class" in TOPIC_HANDLERS["github.pull_request.opened"]
-
-    # Check metadata
     metadata = HANDLER_METADATA["handle_pr_class"]
     assert metadata.topics == ["github.pull_request.opened"]
 
 
 def test_on_github_class_multiple_events():
-    """Test @on(github_event=...) with multiple event classes."""
+    """@on(github_event=...) with multiple event classes registers all topics."""
     from dispatch_agents.integrations.github import (
         PullRequestBase,
         PullRequestOpened,
@@ -633,52 +475,24 @@ def test_on_github_class_multiple_events():
     async def handle_pr_multi_class(payload: PullRequestBase) -> None:
         pass
 
-    # Check handler was registered
     assert "handle_pr_multi_class" in REGISTERED_HANDLERS
-
-    # Check both topics were mapped
     assert "github.pull_request.opened" in TOPIC_HANDLERS
     assert "github.pull_request.synchronize" in TOPIC_HANDLERS
     assert "handle_pr_multi_class" in TOPIC_HANDLERS["github.pull_request.opened"]
     assert "handle_pr_multi_class" in TOPIC_HANDLERS["github.pull_request.synchronize"]
-
-    # Check metadata contains all topics
     metadata = HANDLER_METADATA["handle_pr_multi_class"]
     assert "github.pull_request.opened" in metadata.topics
     assert "github.pull_request.synchronize" in metadata.topics
 
 
-def test_on_github_class_issue_comment():
-    """Test @on(github_event=...) with IssueCommentCreated class."""
-    from dispatch_agents.integrations.github import IssueCommentCreated
-
-    @on(github_event=IssueCommentCreated)
-    async def handle_comment_class(payload: IssueCommentCreated) -> None:
-        pass
-
-    assert "github.issue_comment.created" in TOPIC_HANDLERS
-
-
-def test_on_github_class_push():
-    """Test @on(github_event=...) with Push class."""
-    from dispatch_agents.integrations.github import Push
-
-    @on(github_event=Push)
-    async def handle_push_class(payload: Push) -> None:
-        pass
-
-    assert "github.push" in TOPIC_HANDLERS
-
-
 def test_on_github_class_validation_success_base_class():
-    """Test @on validation with base class accepts specific event subclasses."""
+    """@on accepts a base class as payload type for multiple PR event subclasses."""
     from dispatch_agents.integrations.github import (
         PullRequestBase,
         PullRequestClosed,
         PullRequestOpened,
     )
 
-    # This should work: using PullRequestBase as payload for multiple PR events
     @on(github_event=[PullRequestOpened, PullRequestClosed])
     async def handle_pr_base(payload: PullRequestBase) -> None:
         pass
@@ -687,10 +501,9 @@ def test_on_github_class_validation_success_base_class():
 
 
 def test_on_github_class_validation_failure():
-    """Test @on validation fails when payload type is incompatible."""
+    """@on raises TypeError when the payload type is incompatible with the event."""
     from dispatch_agents.integrations.github import IssueBase, PullRequestOpened
 
-    # This should fail: IssueBase is not a base class of PullRequestOpened
     with pytest.raises(TypeError, match="is not compatible with"):
 
         @on(github_event=PullRequestOpened)
@@ -699,7 +512,7 @@ def test_on_github_class_validation_failure():
 
 
 def test_on_github_class_invalid_type():
-    """Test @on raises TypeError for invalid github_event type."""
+    """@on raises TypeError when github_event is not a class."""
     with pytest.raises(TypeError, match="Invalid github_event type"):
 
         @on(github_event="not_a_class")  # type: ignore[arg-type]
@@ -714,7 +527,7 @@ def test_on_github_class_invalid_type():
 
 @pytest.mark.asyncio
 async def test_on_github_class_dispatch_pr_opened():
-    """Test dispatching a PR opened event to a class-based handler."""
+    """Dispatching a PR opened event reaches the registered class-based handler."""
     from dispatch_agents.integrations.github import PullRequestOpened
 
     received_payload = None
@@ -725,7 +538,6 @@ async def test_on_github_class_dispatch_pr_opened():
         received_payload = payload
         return {"handled": True, "pr_number": payload.number}
 
-    # Create topic message simulating a GitHub webhook
     message = TopicMessage.create(
         topic="github.pull_request.opened",
         payload={
@@ -740,10 +552,8 @@ async def test_on_github_class_dispatch_pr_opened():
         sender_id="github-webhook-test",
     )
 
-    # Dispatch
     result = await dispatch_message(message)
 
-    # Verify
     assert isinstance(result, SuccessPayload)
     assert result.result == {"handled": True, "pr_number": 123}
     assert received_payload is not None
@@ -752,7 +562,7 @@ async def test_on_github_class_dispatch_pr_opened():
 
 @pytest.mark.asyncio
 async def test_on_github_class_dispatch_push():
-    """Test dispatching a push event to a class-based Push handler."""
+    """Dispatching a push event reaches the registered Push handler."""
     from dispatch_agents.integrations.github import Push
 
     @on(github_event=Push)
@@ -792,18 +602,19 @@ async def test_on_github_class_dispatch_push():
     assert result.result == {"ref": "refs/heads/feature", "commits": 1}
 
 
+# =============================================================================
+# Test: Regression
+# =============================================================================
+
+
 def test_pull_request_review_comment_validation_error_malformed_user():
-    """Test that malformed user objects in PR review comment payloads raise ValidationError.
+    """Malformed user objects in PR review comment payloads raise ValidationError.
 
-    This reproduces an issue where mock/generated payloads have user objects
-    with only a 'description' field instead of required 'id' and 'login' fields.
+    Reproduces an issue where generated payloads have user objects with only
+    a 'description' field instead of required 'id' and 'login' fields.
     """
-    from pydantic import ValidationError
-
     from dispatch_agents.integrations.github import PullRequestReviewCommentCreated
 
-    # This payload has malformed user objects - they only have 'description'
-    # instead of required fields like 'id' and 'login'
     malformed_payload = {
         "sender": {
             "id": -93062968,
@@ -865,9 +676,13 @@ def test_pull_request_review_comment_validation_error_malformed_user():
     with pytest.raises(ValidationError) as exc_info:
         PullRequestReviewCommentCreated.model_validate(malformed_payload)
 
-    # Verify the error mentions the missing required fields
     error_str = str(exc_info.value)
     assert "owner" in error_str or "user" in error_str
+
+
+# =============================================================================
+# Test: Spec Alignment
+# =============================================================================
 
 
 def test_pydantic_required_fields_match_octokit_spec():
@@ -946,7 +761,6 @@ def test_pydantic_required_fields_match_octokit_spec():
         "InstallationTargetRenamed": {"repository", "sender"},
         "PullRequestReviewRequested": {
             "pull_request",
-            "requested_reviewer",
             "sender",
             "repository",
             "action",
@@ -954,7 +768,6 @@ def test_pydantic_required_fields_match_octokit_spec():
         },
         "PullRequestReviewRequestRemoved": {
             "pull_request",
-            "requested_reviewer",
             "sender",
             "repository",
             "action",

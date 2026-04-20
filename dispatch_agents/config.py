@@ -577,6 +577,8 @@ class DispatchConfig(BaseModel):
             result["secrets"] = [
                 {"name": s.name, "secret_id": s.secret_id} for s in self.secrets
             ]
+        if self.mcp_servers:
+            result["mcp_servers"] = [{"server": m.server} for m in self.mcp_servers]
         if self.volumes:
             result["volumes"] = [
                 {"name": v.name, "mountPath": v.mount_path, "mode": v.mode.value}
