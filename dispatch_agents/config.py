@@ -500,6 +500,49 @@ class DispatchConfig(BaseModel):
             raise ValueError(f"All env values must be strings. {examples}")
         return v
 
+    vars: dict[str, Any] | None = Field(
+        default=None,
+        description="Configuration variables accessible at runtime via dispatch_agents.config.vars. "
+        "Unlike env, these are NOT injected as environment variables. "
+        "Supports any YAML-serializable type. Use {value: <any>, description: <str>} "
+        "to attach descriptions for the UI.",
+    )
+
+    @field_validator("vars", mode="before")
+    @classmethod
+    def _validate_vars(cls, v: dict | None) -> dict[str, Any] | None:
+        """Validate vars format.
+
+        Non-dict values (str, int, float, bool, list, None) are allowed as-is.
+        Dict values must use the described-var shape:
+        ``{value: <any>, description?: <str>}``. Other dicts are rejected
+        because ``value`` and ``description`` are reserved keywords — silently
+        treating arbitrary dicts as plain values would let a caller
+        accidentally collide with the described-var schema.
+        """
+        if not v or not isinstance(v, dict):
+            return v
+        _DESCRIBED_KEYS = {"value", "description"}
+        for key, val in v.items():
+            if not isinstance(val, dict):
+                continue
+            if "value" not in val:
+                raise ValueError(
+                    f"Var '{key}' is a dict without a 'value' key. Dict values "
+                    "must use the described-var shape "
+                    "{value: <any>, description?: <str>}. To store structured "
+                    "data, nest it under 'value'."
+                )
+            extra = set(val.keys()) - _DESCRIBED_KEYS
+            if extra:
+                raise ValueError(
+                    f"Var '{key}' has unexpected keys {sorted(extra)}. Dict "
+                    "values may only use the described-var shape "
+                    "{value: <any>, description?: <str>}. To store structured "
+                    "data, nest it under 'value'."
+                )
+        return v
+
     secrets: list[SecretConfig] | None = Field(
         default=None,
         description="Secrets to inject as environment variables",
@@ -573,10 +616,14 @@ class DispatchConfig(BaseModel):
             result["local_dependencies"] = self.local_dependencies
         if self.env:
             result["env"] = dict(self.env)
+        if self.vars:
+            result["vars"] = dict(self.vars)
         if self.secrets:
             result["secrets"] = [
                 {"name": s.name, "secret_id": s.secret_id} for s in self.secrets
             ]
+        if self.mcp_servers:
+            result["mcp_servers"] = [{"server": m.server} for m in self.mcp_servers]
         if self.volumes:
             result["volumes"] = [
                 {"name": v.name, "mountPath": v.mount_path, "mode": v.mode.value}
@@ -602,3 +649,117 @@ class DispatchConfig(BaseModel):
         return result
 
     model_config = {"populate_by_name": True}
+
+
+# ---------------------------------------------------------------------------
+# Runtime config singleton
+# ---------------------------------------------------------------------------
+
+import functools as _functools
+
+_DISPATCH_YAML_PATH = "/app/dispatch.yaml"
+
+
+@_functools.lru_cache(maxsize=1)
+def _load_runtime_config() -> "DispatchConfig":
+    """Load dispatch.yaml once and cache the parsed DispatchConfig.
+
+    Falls back to an empty DispatchConfig when the file is absent
+    (dev mode or non-containerized runs). Namespace and agent_name
+    additionally fall back to DISPATCH_NAMESPACE / DISPATCH_AGENT_NAME
+    env vars so local ``dispatch agent dev`` runs work transparently.
+    """
+    import yaml as _yaml
+
+    path = os.environ.get("DISPATCH_CONFIG_PATH", _DISPATCH_YAML_PATH)
+    raw: dict = {}
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            raw = _yaml.safe_load(f) or {}
+
+    cfg = DispatchConfig.model_validate(raw)
+
+    # Env-var fallbacks for identity fields used outside containers
+    updates: dict[str, Any] = {}
+    if cfg.namespace is None:
+        ns = os.environ.get("DISPATCH_NAMESPACE")
+        if ns:
+            updates["namespace"] = ns
+    if cfg.agent_name is None:
+        name = os.environ.get("DISPATCH_AGENT_NAME")
+        if name:
+            updates["agent_name"] = name
+    if updates:
+        cfg = cfg.model_copy(update=updates)
+
+    return cfg
+
+
+_DESCRIBED_VAR_KEYS = frozenset({"value", "description"})
+
+
+def _is_described_var(val: Any) -> bool:
+    """Check if a value is a described var ({value, description}) vs a plain dict."""
+    return (
+        isinstance(val, dict)
+        and "value" in val
+        and set(val.keys()) <= _DESCRIBED_VAR_KEYS
+    )
+
+
+def _unwrap_vars(raw: dict[str, Any] | None) -> dict[str, Any]:
+    """Unwrap described vars ({value, description}) to plain values.
+
+    Plain dicts (with keys outside {value, description}) are passed through as-is.
+    """
+    if not raw:
+        return {}
+    result: dict[str, Any] = {}
+    for key, val in raw.items():
+        if _is_described_var(val):
+            result[key] = val["value"]
+        else:
+            result[key] = val
+    return result
+
+
+def _extract_var_descriptions(raw: dict[str, Any] | None) -> dict[str, str]:
+    """Extract description strings from described vars."""
+    if not raw:
+        return {}
+    result: dict[str, str] = {}
+    for key, val in raw.items():
+        if _is_described_var(val) and "description" in val:
+            result[key] = val["description"]
+    return result
+
+
+class _RuntimeConfig:
+    """Proxy that exposes dispatch.yaml fields at runtime.
+
+    Usage::
+
+        from dispatch_agents import config
+
+        config.namespace                     # str | None
+        config.agent_name                    # str | None
+        config.vars["temperature"]           # 0.7 (unwrapped)
+        config.vars.get("missing")           # None
+        config.vars_descriptions["max_turns"] # "Maximum agent turns"
+    """
+
+    @property
+    def vars(self) -> dict[str, Any]:
+        """Return unwrapped vars dict (described vars return just the value)."""
+        return _unwrap_vars(_load_runtime_config().vars)
+
+    @property
+    def vars_descriptions(self) -> dict[str, str]:
+        """Return descriptions for vars that have them."""
+        return _extract_var_descriptions(_load_runtime_config().vars)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(_load_runtime_config(), name)
+
+
+_runtime = _RuntimeConfig()
