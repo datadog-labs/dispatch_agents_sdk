@@ -1,6 +1,7 @@
 """Unit tests for configuration models and validators."""
 
 import pytest
+import yaml
 
 from dispatch_agents.config import (
     DispatchConfig,
@@ -17,6 +18,8 @@ from dispatch_agents.config import (
     _format_memory,
     _get_valid_cpu_values,
     _get_valid_memory_for_cpu,
+    _load_runtime_config,
+    _runtime,
 )
 
 
@@ -717,3 +720,240 @@ class TestDispatchConfigNetwork:
         config = DispatchConfig()
         result = config.to_yaml_dict()
         assert "network" not in result
+
+
+class TestDispatchConfigVars:
+    """Tests for the vars field on DispatchConfig."""
+
+    def test_vars_with_primitive_types(self):
+        """Should accept primitive types."""
+        config = DispatchConfig(
+            vars={
+                "temperature": 0.7,
+                "max_retries": 3,
+                "debug": True,
+                "greeting": "hello",
+            }
+        )
+        assert config.vars is not None
+        assert config.vars["temperature"] == 0.7
+        assert config.vars["max_retries"] == 3
+        assert config.vars["debug"] is True
+        assert config.vars["greeting"] == "hello"
+
+    def test_vars_described_format(self):
+        """Should accept {value, description} dicts."""
+        config = DispatchConfig(
+            vars={
+                "temperature": {"value": 0.7, "description": "Sampling temp"},
+                "plain": "hello",
+            }
+        )
+        assert config.vars is not None
+        assert config.vars["temperature"] == {
+            "value": 0.7,
+            "description": "Sampling temp",
+        }
+        assert config.vars["plain"] == "hello"
+
+    def test_vars_accepts_lists(self):
+        """Should accept list values."""
+        config = DispatchConfig(vars={"models": ["claude", "gpt-4o"]})
+        assert config.vars is not None
+        assert config.vars["models"] == ["claude", "gpt-4o"]
+
+    def test_vars_rejects_plain_dicts(self):
+        """Should reject dicts that aren't in the described-var shape.
+
+        ``value`` and ``description`` are reserved keywords for the
+        described-var format; silently accepting arbitrary dicts would
+        let a caller accidentally collide with that schema. Structured
+        data must be nested under ``value`` instead.
+        """
+        with pytest.raises(ValueError, match="without a 'value' key"):
+            DispatchConfig(
+                vars={"llm_config": {"provider": "anthropic", "model": "claude"}}
+            )
+
+    def test_vars_rejects_dict_with_extra_keys(self):
+        """Should reject dicts that have 'value' plus other non-reserved keys."""
+        with pytest.raises(ValueError, match="unexpected keys"):
+            DispatchConfig(
+                vars={"x": {"value": 1, "description": "d", "extra": "nope"}}
+            )
+
+    def test_vars_described_with_structured_value(self):
+        """Should accept described vars with list/dict values."""
+        config = DispatchConfig(
+            vars={
+                "payload_fields": {
+                    "value": [{"name": "query", "type": "str"}],
+                    "description": "Input schema fields",
+                }
+            }
+        )
+        assert config.vars is not None
+        assert config.vars["payload_fields"]["value"][0]["name"] == "query"
+
+    def test_vars_described_value_only(self):
+        """Should accept {value} without description."""
+        config = DispatchConfig(vars={"temp": {"value": 0.7}})
+        assert config.vars is not None
+        assert config.vars["temp"] == {"value": 0.7}
+
+    def test_vars_rejects_description_without_value(self):
+        """Should reject dicts with description but no value."""
+        with pytest.raises(ValueError, match="without a 'value' key"):
+            DispatchConfig(vars={"bad": {"description": "no value"}})
+
+    def test_vars_none_by_default(self):
+        """Should default to None."""
+        config = DispatchConfig()
+        assert config.vars is None
+
+    def test_vars_in_to_yaml_dict(self):
+        """Should include vars in YAML serialization."""
+        config = DispatchConfig(vars={"temp": 0.7, "name": "test"})
+        result = config.to_yaml_dict()
+        assert result["vars"] == {"temp": 0.7, "name": "test"}
+
+    def test_vars_excluded_when_none(self):
+        """Should exclude vars from YAML when None."""
+        config = DispatchConfig()
+        result = config.to_yaml_dict()
+        assert "vars" not in result
+
+    def test_vars_excluded_when_empty(self):
+        """Should exclude vars from YAML when empty dict."""
+        config = DispatchConfig(vars={})
+        result = config.to_yaml_dict()
+        assert "vars" not in result
+
+    def test_vars_round_trip_through_yaml(self):
+        """Should survive YAML serialize → parse → validate round trip."""
+        original = DispatchConfig(
+            namespace="test",
+            vars={
+                "temperature": 0.7,
+                "debug": True,
+                "prompt": "You are helpful.\nBe concise.",
+            },
+        )
+        yaml_str = yaml.dump(original.to_yaml_dict())
+        parsed = yaml.safe_load(yaml_str)
+        restored = DispatchConfig.model_validate(parsed)
+        assert restored.vars == original.vars
+
+    def test_vars_with_dotted_keys(self):
+        """Should accept dotted key names (not valid as env var names)."""
+        config = DispatchConfig(vars={"llm.temperature": 0.7, "llm.model": "claude"})
+        assert config.vars is not None
+        assert config.vars["llm.temperature"] == 0.7
+
+
+class TestRuntimeConfig:
+    """Tests for the _RuntimeConfig singleton."""
+
+    def test_reads_vars_from_file(self, tmp_path, monkeypatch):
+        """Should read vars from dispatch.yaml via DISPATCH_CONFIG_PATH."""
+        config_file = tmp_path / "dispatch.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "namespace": "test-ns",
+                    "agent_name": "test-agent",
+                    "vars": {"temperature": 0.7, "debug": True},
+                }
+            )
+        )
+        monkeypatch.setenv("DISPATCH_CONFIG_PATH", str(config_file))
+        _load_runtime_config.cache_clear()
+
+        assert _runtime.namespace == "test-ns"
+        assert _runtime.agent_name == "test-agent"
+        assert _runtime.vars["temperature"] == 0.7
+        assert _runtime.vars["debug"] is True
+
+        _load_runtime_config.cache_clear()
+
+    def test_vars_empty_when_absent(self, tmp_path, monkeypatch):
+        """Should return empty dict when vars not in dispatch.yaml."""
+        config_file = tmp_path / "dispatch.yaml"
+        config_file.write_text(yaml.dump({"namespace": "test"}))
+        monkeypatch.setenv("DISPATCH_CONFIG_PATH", str(config_file))
+        _load_runtime_config.cache_clear()
+
+        assert _runtime.vars == {}
+
+        _load_runtime_config.cache_clear()
+
+    def test_env_var_fallback(self, tmp_path, monkeypatch):
+        """Should fall back to env vars when file has no namespace/agent_name."""
+        config_file = tmp_path / "dispatch.yaml"
+        config_file.write_text(yaml.dump({}))
+        monkeypatch.setenv("DISPATCH_CONFIG_PATH", str(config_file))
+        monkeypatch.setenv("DISPATCH_NAMESPACE", "env-ns")
+        monkeypatch.setenv("DISPATCH_AGENT_NAME", "env-agent")
+        _load_runtime_config.cache_clear()
+
+        assert _runtime.namespace == "env-ns"
+        assert _runtime.agent_name == "env-agent"
+
+        _load_runtime_config.cache_clear()
+
+    def test_missing_file_returns_defaults(self, tmp_path, monkeypatch):
+        """Should return defaults when dispatch.yaml doesn't exist."""
+        monkeypatch.setenv("DISPATCH_CONFIG_PATH", str(tmp_path / "nonexistent.yaml"))
+        _load_runtime_config.cache_clear()
+
+        assert _runtime.namespace is None
+        assert _runtime.vars == {}
+
+        _load_runtime_config.cache_clear()
+
+    def test_described_vars_unwrapped(self, tmp_path, monkeypatch):
+        """Should unwrap {value, description} vars to plain values."""
+        config_file = tmp_path / "dispatch.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "vars": {
+                        "temperature": {"value": 0.7, "description": "Sampling temp"},
+                        "debug": True,
+                        "name": {"value": "test", "description": "Agent name"},
+                    },
+                }
+            )
+        )
+        monkeypatch.setenv("DISPATCH_CONFIG_PATH", str(config_file))
+        _load_runtime_config.cache_clear()
+
+        assert _runtime.vars["temperature"] == 0.7
+        assert _runtime.vars["debug"] is True
+        assert _runtime.vars["name"] == "test"
+
+        _load_runtime_config.cache_clear()
+
+    def test_vars_descriptions(self, tmp_path, monkeypatch):
+        """Should extract descriptions from described vars."""
+        config_file = tmp_path / "dispatch.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "vars": {
+                        "temperature": {"value": 0.7, "description": "Sampling temp"},
+                        "debug": True,
+                        "name": {"value": "test", "description": "Agent name"},
+                    },
+                }
+            )
+        )
+        monkeypatch.setenv("DISPATCH_CONFIG_PATH", str(config_file))
+        _load_runtime_config.cache_clear()
+
+        descs = _runtime.vars_descriptions
+        assert descs["temperature"] == "Sampling temp"
+        assert descs["name"] == "Agent name"
+        assert "debug" not in descs
+
+        _load_runtime_config.cache_clear()

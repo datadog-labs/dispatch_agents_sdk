@@ -341,6 +341,99 @@ def test_sdk_event_coverage(octokit_schema: dict[str, Any]):
         )
 
 
+@pytest.mark.parametrize(
+    ("model_name", "definition_name", "field_name", "required", "nullable", "types"),
+    [
+        (
+            "GitHubRepository",
+            "repository",
+            "created_at",
+            True,
+            False,
+            {"integer", "string"},
+        ),
+        (
+            "GitHubRepository",
+            "repository",
+            "pushed_at",
+            True,
+            True,
+            {"integer", "string"},
+        ),
+        (
+            "GitHubCommitUser",
+            "committer",
+            "email",
+            True,
+            True,
+            {"string"},
+        ),
+    ],
+)
+def test_confirmed_shared_model_fields_match_octokit(
+    octokit_schema: dict[str, Any],
+    model_name: str,
+    definition_name: str,
+    field_name: str,
+    required: bool,
+    nullable: bool,
+    types: set[str],
+):
+    """Confirmed shared-model drift fields stay aligned with the octokit schema."""
+
+    def type_signature(prop: dict[str, Any]) -> tuple[set[str], bool]:
+        """Extract all non-null types/refs from a schema property."""
+        if "$ref" in prop:
+            return {prop["$ref"].split("/")[-1]}, False
+
+        if "anyOf" in prop or "oneOf" in prop:
+            variants = prop.get("anyOf", prop.get("oneOf", []))
+            types_seen: set[str] = set()
+            is_nullable = False
+            for opt in variants:
+                if opt.get("type") == "null":
+                    is_nullable = True
+                elif "$ref" in opt:
+                    types_seen.add(opt["$ref"].split("/")[-1])
+                elif "type" in opt:
+                    types_seen.add(opt["type"])
+            return types_seen, is_nullable
+
+        if "allOf" in prop:
+            allof_types: set[str] = set()
+            for opt in prop["allOf"]:
+                if "$ref" in opt:
+                    allof_types.add(opt["$ref"].split("/")[-1])
+                elif "type" in opt:
+                    allof_types.add(opt["type"])
+            return allof_types or {"object"}, False
+
+        if "type" in prop:
+            t = prop["type"]
+            if isinstance(t, list):
+                return {x for x in t if x != "null"}, "null" in t
+            return {t}, False
+
+        return {"unknown"}, False
+
+    model_class = getattr(gh_module, model_name)
+    pydantic_schema = model_class.model_json_schema()
+    octokit_def = octokit_schema["definitions"][definition_name]
+
+    pydantic_prop = pydantic_schema["properties"][field_name]
+    octokit_prop = octokit_def["properties"][field_name]
+
+    pydantic_types, pydantic_nullable = type_signature(pydantic_prop)
+    octokit_types, octokit_nullable = type_signature(octokit_prop)
+
+    assert (field_name in pydantic_schema.get("required", [])) is required
+    assert (field_name in octokit_def.get("required", [])) is required
+    assert pydantic_nullable is nullable
+    assert octokit_nullable is nullable
+    assert pydantic_types == types
+    assert octokit_types == types
+
+
 def get_all_pydantic_models() -> list[type[Any]]:
     """Get all Pydantic model classes from the GitHub module."""
     from pydantic import BaseModel

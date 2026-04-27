@@ -162,6 +162,7 @@ def _dev_mode_audit_hook(event: str, args: tuple) -> None:
 
 
 from .agent_service import AgentServiceClient
+from .config import _runtime as config
 from .events import (
     HANDLER_METADATA,
     REGISTERED_HANDLERS,
@@ -208,6 +209,8 @@ from .models import (
 )
 
 __all__ = [
+    # runtime config
+    "config",
     # storage and dev mode isolation
     "get_data_dir",
     "DisallowedWriteError",
