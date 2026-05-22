@@ -58,7 +58,7 @@ class TestInstrumentationIntegration:
 
     def test_includes_extra_headers_when_set(self) -> None:
         """X-Dispatch-Extra-Headers is included when ContextVar is non-empty."""
-        from dispatch_agents.instrument import _get_context_headers
+        from dispatch_agents._instrument import _get_context_headers
 
         with extra_headers({"X-Dataset-Id": "abc"}):
             headers = _get_context_headers()
@@ -68,7 +68,7 @@ class TestInstrumentationIntegration:
 
     def test_omits_extra_headers_when_empty(self) -> None:
         """X-Dispatch-Extra-Headers is NOT included when ContextVar is empty."""
-        from dispatch_agents.instrument import _get_context_headers
+        from dispatch_agents._instrument import _get_context_headers
 
         # Ensure no extra headers are set
         token = _extra_llm_headers.set({})

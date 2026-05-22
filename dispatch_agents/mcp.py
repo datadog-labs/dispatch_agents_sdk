@@ -26,6 +26,8 @@ from dispatch_agents.events import (
     get_invocation_id_for_trace,
 )
 
+__all__ = ["McpHttpServerConfig", "get_mcp_client", "get_mcp_servers_config"]
+
 MCP_CONFIG_PATH = os.environ.get("MCP_CONFIG_PATH", ".mcp.json")
 
 
@@ -64,7 +66,7 @@ def _build_trace_meta() -> _TraceMeta | None:
     return meta if meta else None
 
 
-class TracingClientSession:
+class _TracingClientSession:
     """Wrapper around MCP ClientSession that injects trace context into tool calls.
 
     This wrapper intercepts call_tool calls and automatically injects trace context
@@ -134,7 +136,14 @@ class TracingClientSession:
 class McpHttpServerConfig(TypedDict):
     """MCP HTTP server configuration compatible with Claude Agent SDK.
 
-    This matches the McpHttpServerConfig type from claude_agent_sdk.types.
+    This matches the ``McpHttpServerConfig`` type from ``claude_agent_sdk.types``
+    and is returned by :func:`get_mcp_servers_config`.
+
+    Attributes:
+        type: Always ``"http"`` — identifies the transport protocol.
+        url: The HTTP endpoint for the MCP server (set by the platform).
+        headers: Optional auth headers injected by the platform (e.g.,
+            ``Authorization: Bearer <token>``). Do not set manually.
     """
 
     type: Literal["http"]
@@ -182,14 +191,9 @@ def get_mcp_servers_config() -> dict[str, McpHttpServerConfig]:
         ``dispatch_agents.contrib.claude``.
 
     Returns:
-        Dict mapping server names to their HTTP transport configuration:
-        {
-            "server_name": {
-                "type": "http",
-                "url": "https://...",
-                "headers": {"Authorization": "Bearer ...", ...}
-            }
-        }
+        Dict mapping server names to their HTTP transport configuration.
+        Each value is a ``McpHttpServerConfig`` with ``type``, ``url``, and
+        optional ``headers`` fields.
 
     Raises:
         FileNotFoundError: If .mcp.json config file not found
@@ -220,7 +224,7 @@ async def get_mcp_client(
     *,
     timeout: float = 30.0,
     read_timeout: float = 300.0,
-) -> AsyncIterator[TracingClientSession]:
+) -> AsyncIterator[_TracingClientSession]:
     """Get an MCP client session for the specified server.
 
     Args:
@@ -230,7 +234,7 @@ async def get_mcp_client(
             This is the maximum time to wait for a tool call response.
 
     Yields:
-        Initialized TracingClientSession ready for MCP operations. Trace context
+        Initialized MCP client session ready for MCP operations. Trace context
         is automatically injected into tool calls via the ``_meta`` field.
 
     Raises:
@@ -263,4 +267,4 @@ async def get_mcp_client(
             read_timeout_seconds=timedelta(seconds=read_timeout),
         ) as session:
             await session.initialize()
-            yield TracingClientSession(session)
+            yield _TracingClientSession(session)

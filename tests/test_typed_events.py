@@ -1,25 +1,23 @@
 """Tests for typed event handlers with Pydantic payloads."""
 
+import json
+
+import httpx
 import pytest
 from pydantic import BaseModel, Field, ValidationError
 
-from dispatch_agents import (
-    HANDLER_METADATA,
-    REGISTERED_HANDLERS,
-    TOPIC_HANDLERS,
-    BasePayload,
-    dispatch_message,
-    fn,
-    get_handler_metadata,
-    get_handler_schemas,
-    on,
-)
-from dispatch_agents.models import (
+from dispatch_agents import BasePayload, emit_event, fn, on
+from dispatch_agents._models import (
     ErrorPayload,
     FunctionMessage,
     SuccessPayload,
     TopicMessage,
 )
+from dispatch_agents.events import _HANDLER_METADATA as HANDLER_METADATA
+from dispatch_agents.events import _REGISTERED_HANDLERS as REGISTERED_HANDLERS
+from dispatch_agents.events import _TOPIC_HANDLERS as TOPIC_HANDLERS
+from dispatch_agents.events import _dispatch_message as dispatch_message
+from dispatch_agents.events import _get_handler_metadata, _get_handler_schemas
 
 
 # Test payload models
@@ -43,6 +41,12 @@ class SimplePayload(BasePayload):
     data: str
 
 
+class EventPayload(BasePayload):
+    """Payload for emit_event shape tests."""
+
+    value: str
+
+
 @pytest.fixture(autouse=True)
 def clear_triggers():
     """Clear registries before each test."""
@@ -53,6 +57,33 @@ def clear_triggers():
     REGISTERED_HANDLERS.clear()
     HANDLER_METADATA.clear()
     TOPIC_HANDLERS.clear()
+
+
+@pytest.mark.asyncio
+async def test_emit_event_payload_shapes(monkeypatch):
+    """dict payloads keep their shape; model payloads are wrapped under data."""
+    monkeypatch.setenv("DISPATCH_NAMESPACE", "test")
+    monkeypatch.setenv("BACKEND_URL", "http://test-backend:8000")
+    requests: list[dict] = []
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json={"event_uid": "event-123"})
+
+    transport = httpx.MockTransport(responder)
+    original_client = httpx.AsyncClient
+
+    def async_client_factory(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", async_client_factory)
+
+    await emit_event("topic.dict", {"value": "dict"})
+    await emit_event("topic.model", EventPayload(value="model"))
+
+    assert requests[0]["payload"] == {"value": "dict"}
+    assert requests[1]["payload"] == {"data": {"value": "model"}}
 
 
 # ============================================================================
@@ -158,7 +189,7 @@ def test_schema_extraction():
         return TestOutputPayload(result=0, message="")
 
     # Check metadata was stored
-    metadata = get_handler_metadata("test.schema")
+    metadata = _get_handler_metadata("test.schema")
     assert metadata is not None
     assert metadata.topics == ["test.schema"]
     assert metadata.handler_name == "handler"
@@ -195,7 +226,7 @@ def test_get_handler_schemas():
         return SimplePayload(data="")
 
     # Get all schemas (includes both @on and @fn handlers)
-    schemas = get_handler_schemas()
+    schemas = _get_handler_schemas()
     assert len(schemas) == 3
     assert "handler1" in schemas
     assert "handler2" in schemas
@@ -292,7 +323,7 @@ def test_unified_registry_populated():
     # Check REGISTERED_HANDLERS (handler_name -> function)
     assert "handler" in REGISTERED_HANDLERS
 
-    # Check HANDLER_METADATA (handler_name -> HandlerMetadata)
+    # Check HANDLER_METADATA (handler_name -> metadata)
     assert "handler" in HANDLER_METADATA
     metadata = HANDLER_METADATA["handler"]
     assert metadata.topics == ["test.registry"]
@@ -340,7 +371,7 @@ def test_fn_decorator_registration():
     assert "get_weather" in REGISTERED_HANDLERS
     assert "get_weather" in HANDLER_METADATA
 
-    # Check metadata (now a HandlerMetadata Pydantic model, not dict)
+    # Check metadata (now a Pydantic model, not dict)
     metadata = HANDLER_METADATA["get_weather"]
     assert metadata.handler_name == "get_weather"
     assert metadata.topics == []  # @fn has no topic triggers

@@ -3,13 +3,12 @@
 import pytest
 from pydantic import ValidationError
 
-from dispatch_agents import (
-    HANDLER_METADATA,
-    REGISTERED_HANDLERS,
-    TOPIC_HANDLERS,
-    dispatch_message,
-    on,
-)
+from dispatch_agents import on
+from dispatch_agents._models import SuccessPayload, TopicMessage
+from dispatch_agents.events import _HANDLER_METADATA as HANDLER_METADATA
+from dispatch_agents.events import _REGISTERED_HANDLERS as REGISTERED_HANDLERS
+from dispatch_agents.events import _TOPIC_HANDLERS as TOPIC_HANDLERS
+from dispatch_agents.events import _dispatch_message as dispatch_message
 from dispatch_agents.integrations.github import (
     GitHubBranch,
     GitHubChangeValue,
@@ -25,7 +24,6 @@ from dispatch_agents.integrations.github import (
     PullRequestReviewRequestRemoved,
     Push,
 )
-from dispatch_agents.models import SuccessPayload, TopicMessage
 
 
 @pytest.fixture(autouse=True)

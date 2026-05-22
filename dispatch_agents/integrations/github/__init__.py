@@ -1,9 +1,10 @@
 """GitHub integration for Dispatch agents.
 
 This module provides typed payloads for GitHub webhook events that can be used
-with the @on(github_event=...) decorator.
+with the ``@on(github_event=...)`` decorator.
 
-Quick Start:
+Quick start::
+
     from dispatch_agents import on
     from dispatch_agents.integrations.github import PullRequestOpened
 
@@ -22,63 +23,32 @@ Quick Start:
     async def handle_pr_changes(payload: PullRequestBase) -> None:
         ...
 
-Action-Specific Event Classes:
-    Each GitHub event has its own class that can be used with @on(github_event=...):
-    - PullRequestOpened, PullRequestClosed, PullRequestSynchronize, ...
-    - IssueOpened, IssueClosed, IssueLabeled, ...
-    - IssueCommentCreated, IssueCommentEdited, ...
-    - Push (no action)
-    - CheckRunCreated, CheckRunCompleted, ...
-    - WorkflowRunCompleted, ...
-    - ReleasePublished, ...
-    - Create, Delete, Fork (no action)
-    - StarCreated, StarDeleted
-    - InstallationCreated, ...
-    - DeploymentCreated
-    - DeploymentStatusCreated
-    - DeploymentReviewApproved, DeploymentReviewRejected, DeploymentReviewRequested
-    - DependabotAlertCreated, DependabotAlertFixed, DependabotAlertDismissed,
-      DependabotAlertReintroduced, DependabotAlertAutoDismissed,
-      DependabotAlertAutoReopened, DependabotAlertReopened
-    - LabelCreated, LabelEdited, LabelDeleted
+Each GitHub event has its own class for use with ``@on(github_event=...)``:
+PullRequestOpened, PullRequestClosed, PullRequestSynchronize, IssueOpened, IssueClosed,
+IssueLabeled, IssueCommentCreated, IssueCommentEdited, Push, CheckRunCreated,
+CheckRunCompleted, WorkflowRunCompleted, ReleasePublished, Create, Delete, Fork,
+StarCreated, StarDeleted, InstallationCreated, DeploymentCreated, DeploymentStatusCreated,
+DeploymentReviewApproved, DeploymentReviewRejected, DeploymentReviewRequested,
+DependabotAlertCreated, DependabotAlertFixed, DependabotAlertDismissed,
+DependabotAlertReintroduced, DependabotAlertAutoDismissed, DependabotAlertAutoReopened,
+DependabotAlertReopened, LabelCreated, LabelEdited, LabelDeleted.
 
-No-Action Events:
-    Events with no action field (subscribe directly to the event class):
-    - CommitStatus
-    - WorkflowDispatch
+Events with no action field (subscribe directly): CommitStatus, WorkflowDispatch.
 
-Base Classes (for subscribing to multiple events):
-    - PullRequestBase: All pull_request.* events
-    - IssueBase: All issues.* events
-    - IssueCommentBase: All issue_comment.* events
-    - CheckRunBase: All check_run.* events
-    - WorkflowRunBase: All workflow_run.* events
-    - ReleaseBase: All release.* events
-    - StarBase: All star.* events
-    - InstallationBase: All installation.* events
-    - DeploymentBase: All deployment.* events
-    - DeploymentStatusBase: All deployment_status.* events
-    - DeploymentReviewBase: All deployment_review.* events
-    - DependabotAlertBase: All dependabot_alert.* events
-    - LabelBase: All label.* events
+Base classes for subscribing to multiple events at once:
+PullRequestBase (all pull_request events), IssueBase (all issues events),
+IssueCommentBase (all issue_comment events), CheckRunBase (all check_run events),
+WorkflowRunBase (all workflow_run events), ReleaseBase (all release events),
+StarBase (all star events), InstallationBase (all installation events),
+DeploymentBase (all deployment events), DeploymentStatusBase (all deployment_status
+events), DeploymentReviewBase (all deployment_review events), DependabotAlertBase
+(all dependabot_alert events), LabelBase (all label events).
 
-GitHub Topics:
-    Events are routed to topics with the pattern "github.{event}.{action}":
-    - github.pull_request.opened
-    - github.pull_request.synchronize
-    - github.issue_comment.created
-    - github.push (no action for push events)
-    - github.check_run.completed
-    - github.deployment.created
-    - github.deployment_status.created
-    - github.deployment_review.approved
-    - github.deployment_review.rejected
-    - github.deployment_review.requested
-    - github.status (no action for commit status events)
-    - github.workflow_dispatch (no action for workflow dispatch events)
-    - github.dependabot_alert.created
-    - github.label.created
-    - etc.
+Events are routed to topics with the pattern ``github.{event}.{action}``, for example:
+``github.pull_request.opened``, ``github.issue_comment.created``,
+``github.push`` (no action for push events), ``github.check_run.completed``,
+``github.deployment.created``, ``github.status`` (no action for commit status events),
+``github.workflow_dispatch`` (no action), ``github.dependabot_alert.created``, etc.
 """
 
 from __future__ import annotations
@@ -87,12 +57,12 @@ from typing import Any, ClassVar, Literal, Self
 
 from pydantic import ConfigDict, Field, StrictInt, model_validator
 
+from dispatch_agents._models import StrictBaseModel
 from dispatch_agents.events import BasePayload
 from dispatch_agents.integrations.github.client import GitHubAppToken
 from dispatch_agents.integrations.github.client import (
     get_github_app_token as _get_github_app_token,
 )
-from dispatch_agents.models import StrictBaseModel
 
 # =============================================================================
 # Constants
@@ -824,9 +794,10 @@ class PullRequestBase(GitHubEventPayload):
     - locked, unlocked
 
     Use action-specific classes like PullRequestOpened, PullRequestClosed, etc.
-    for type-safe event handling with the @on decorator.
+    for type-safe event handling with the ``@on`` decorator.
 
-    Example:
+    Example::
+
         from dispatch_agents import on
         from dispatch_agents.integrations.github import PullRequestOpened
 
@@ -3925,6 +3896,7 @@ __all__ = [
     "PullRequestUnlabeled",
     "PullRequestAssigned",
     "PullRequestUnassigned",
+    "PullRequestReviewTargetBase",
     "PullRequestReviewRequested",
     "PullRequestReviewRequestRemoved",
     "PullRequestReadyForReview",

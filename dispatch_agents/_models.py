@@ -1,16 +1,21 @@
-"""Core models for the Dispatch SDK.
+"""Core message and payload types for the Dispatch Agents SDK.
 
-This module contains the fundamental data structures used across the entire
-Dispatch ecosystem, including Message types for universal communication and Agent
-for service registration and management.
+Message types represent the different triggers that can invoke an agent handler:
 
-Message Type Hierarchy (similar to LangChain's BaseMessage pattern):
-- BaseMessage: Abstract base with common fields (uid, trace_id, sender_id, ts, payload)
-- TopicMessage: For @on topic handlers (has 'topic' field)
-- FunctionMessage: For @fn direct calls (has 'function_name' field)
-- ScheduleMessage: For scheduled/cron triggers (has 'schedule_name' field)
-- Message: Discriminated union type alias for routing
+- `TopicMessage` — delivered when an event is published to a subscribed topic (``@on``)
+- `FunctionMessage` — delivered when another agent calls this function via ``invoke()`` (``@fn``)
+- `ScheduleMessage` — delivered by a time-based schedule trigger
+- `Message` — discriminated union of all message types; use as a type annotation when
+  your handler accepts any trigger kind
 """
+
+__all__ = [
+    "TopicMessage",
+    "FunctionMessage",
+    "ScheduleMessage",
+    "LLMCallMessage",
+    "Message",
+]
 
 import uuid
 from datetime import UTC, datetime
@@ -18,6 +23,13 @@ from enum import StrEnum, auto
 from typing import Annotated, Any, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+_IDENTIFIER_PATTERN = r"^[a-zA-Z0-9._-]+$"
+_IDENTIFIER_MAX_LENGTH = 128
+Identifier: TypeAlias = Annotated[
+    str,
+    Field(min_length=1, max_length=_IDENTIFIER_MAX_LENGTH, pattern=_IDENTIFIER_PATTERN),
+]
 
 
 def get_now_utc() -> str:
@@ -391,7 +403,7 @@ class AgentFunction(StrictBaseModel):
     the triggers that can invoke it (topics, schedules, etc.).
     """
 
-    name: str = Field(description="Handler function name")
+    name: Identifier = Field(description="Handler function name")
     description: str | None = Field(
         default=None, description="Handler docstring or description"
     )
@@ -627,9 +639,9 @@ class PublishEventBody(StrictBaseModel):
 class SubscriptionBody(StrictBaseModel):
     """Request body for agent subscription management."""
 
-    topics: list[str]
-    agent_name: str
-    functions: list[AgentFunction] | None = None
+    topics: list[Identifier] = Field(default_factory=list)
+    agent_name: Identifier
+    functions: list[AgentFunction] = Field(min_length=1)
 
 
 class EventRequest(StrictBaseModel):
@@ -652,7 +664,7 @@ class PublishResponse(StrictBaseModel):
     handler_count: int = 0  # Number of handlers triggered
 
 
-from dispatch_agents.invocation import InvocationStatus
+from dispatch_agents._invocation import InvocationStatus
 
 
 class InvokeFunctionRequest(StrictBaseModel):
@@ -731,19 +743,33 @@ class SessionStoreRequest(StrictBaseModel):
 
 
 class MemoryWriteResponse(StrictBaseModel):
-    """Response from a memory write (add/delete) operation."""
+    """Response from a memory write (add/delete) operation.
+
+    Attributes:
+        message: Human-readable confirmation of the write result.
+    """
 
     message: str
 
 
 class KVGetResponse(StrictBaseModel):
-    """Response from a long-term memory get operation."""
+    """Response from a long-term memory get operation.
+
+    Attributes:
+        value: The stored string value, or ``None`` if the key does not exist.
+    """
 
     value: str | None
 
 
 class KVMemoryRecord(StrictBaseModel):
-    """A single long-term memory record."""
+    """A single long-term memory record returned by a list operation.
+
+    Attributes:
+        mem_key: The record's key within the agent's KV namespace.
+        mem_value: The stored string value.
+        last_updated: ISO-8601 timestamp of the last write, or ``None`` if unknown.
+    """
 
     mem_key: str
     mem_value: str
@@ -751,13 +777,23 @@ class KVMemoryRecord(StrictBaseModel):
 
 
 class KVListResponse(StrictBaseModel):
-    """Response from a long-term memory list operation."""
+    """Response from a long-term memory list operation.
+
+    Attributes:
+        agent_name: The agent whose KV namespace was queried.
+        memories: All records found; empty list if none exist.
+    """
 
     agent_name: str
     memories: list[KVMemoryRecord]
 
 
 class SessionGetResponse(StrictBaseModel):
-    """Response from a short-term memory get operation."""
+    """Response from a short-term memory get operation.
+
+    Attributes:
+        session_data: Key/value pairs stored in the current session.
+            Empty dict if no session data has been written.
+    """
 
     session_data: dict[str, Any]

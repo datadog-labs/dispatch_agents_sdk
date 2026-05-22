@@ -83,6 +83,23 @@ async def test_returns_token_and_calls_backend(monkeypatch):
     assert request.headers["x-dispatch-client-version"]
 
 
+async def test_package_level_helper_delegates(monkeypatch):
+    import dispatch_agents.integrations.github as github
+    from dispatch_agents.integrations.github import GitHubAppToken
+
+    expected = GitHubAppToken(
+        token="ghs_public_path",
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+
+    async def fake_get_github_app_token():
+        return expected
+
+    monkeypatch.setattr(github, "_get_github_app_token", fake_get_github_app_token)
+
+    assert await github.get_github_app_token() is expected
+
+
 async def test_reuses_cached_token_within_single_run(monkeypatch):
     _set_sdk_env(monkeypatch)
     call_count = 0

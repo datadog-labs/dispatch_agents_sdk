@@ -3,8 +3,7 @@ from typing import Any
 
 import httpx
 
-from .events import _get_api_base_url, _get_auth_headers
-from .models import (
+from ._models import (
     KVGetResponse,
     KVListResponse,
     KVStoreRequest,
@@ -12,6 +11,7 @@ from .models import (
     SessionGetResponse,
     SessionStoreRequest,
 )
+from .events import _get_api_base_url, _get_auth_headers
 
 
 def _get_agent_name(agent_name: str | None = None) -> str:
@@ -37,7 +37,7 @@ def _get_agent_name(agent_name: str | None = None) -> str:
     return env_agent_name
 
 
-class LongTermMemoryClient:
+class _LongTermMemoryClient:
     """Long-term memory (KV store) operations: add/get/delete.
 
     Agent name is auto-detected from the DISPATCH_AGENT_NAME environment variable
@@ -163,7 +163,7 @@ class LongTermMemoryClient:
             return KVListResponse.model_validate(response.json())
 
 
-class ShortTermMemoryClient:
+class _ShortTermMemoryClient:
     """Short-term conversational memory (session store): add/get/delete.
 
     Agent name is auto-detected from the DISPATCH_AGENT_NAME environment variable
@@ -274,13 +274,13 @@ class ShortTermMemoryClient:
             return MemoryWriteResponse.model_validate(response.json())
 
 
-class MemoryClient:
+class _MemoryClient:
     """Top-level Memory client grouping long-term and short-term memory."""
 
     def __init__(self) -> None:
-        self.long_term = LongTermMemoryClient()
-        self.short_term = ShortTermMemoryClient()
+        self.long_term = _LongTermMemoryClient()
+        self.short_term = _ShortTermMemoryClient()
 
 
 # Convenient module-level singleton
-memory = MemoryClient()
+memory = _MemoryClient()

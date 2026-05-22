@@ -7,7 +7,8 @@ are automatically correlated with the invocation trace.
 IMPORTANT: LLM calls should be made inside handler functions, not at module level.
 Calls made outside handlers won't be associated with any trace.
 
-Example:
+Example::
+
     from dispatch_agents import fn, llm
 
     @fn()
@@ -91,7 +92,8 @@ def extra_headers(headers: dict[str, str]) -> Generator[None, None, None]:
     underlying LLM provider (e.g., an internal OpenAI-compatible gateway).
     Nested contexts merge with outer ones; inner keys override outer keys.
 
-    Example:
+    Example::
+
         from dispatch_agents import extra_headers
 
         @fn()
@@ -211,7 +213,8 @@ class LLMClient:
 
     Automatically propagates trace context for correlation with agent invocations.
 
-    Example:
+    Example::
+
         from dispatch_agents import llm
 
         # Simple one-liner
@@ -291,7 +294,8 @@ class LLMClient:
         Returns:
             LLMResponse with content, usage metrics, and cost
 
-        Example:
+        Example::
+
             # Basic
             response = await llm.chat("What is 2+2?")
             print(response.content)
@@ -388,7 +392,8 @@ class LLMClient:
             httpx.HTTPStatusError: If the request fails
             RuntimeError: If DISPATCH_NAMESPACE is not set
 
-        Example:
+        Example::
+
             response = await llm_client.inference([
                 {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": "What is 2+2?"}
@@ -523,7 +528,8 @@ async def chat(
     This is a convenience function that uses the module-level singleton.
     See LLMClient.chat() for full documentation.
 
-    Example:
+    Example::
+
         from dispatch_agents.llm import chat
 
         response = await chat("What is 2+2?")
@@ -564,7 +570,8 @@ async def inference(
     This is a convenience function that uses the module-level singleton.
     See LLMClient.inference() for full documentation.
 
-    Example:
+    Example::
+
         from dispatch_agents.llm import inference
 
         response = await inference([
@@ -634,7 +641,8 @@ async def log_llm_call(
     Returns:
         The llm_call_id assigned to this logged call
 
-    Example:
+    Example::
+
         # Using OpenAI client directly (only do this if you need features
         # not available in llm.chat(), otherwise just use llm.chat()!)
         from openai import AsyncOpenAI
@@ -875,7 +883,8 @@ async def log_openai_response(
     Returns:
         The llm_call_id assigned to this logged call
 
-    Example:
+    Example::
+
         from openai import AsyncOpenAI
         from dispatch_agents import llm
 
@@ -932,7 +941,8 @@ async def log_anthropic_response(
     Returns:
         The llm_call_id assigned to this logged call
 
-    Example:
+    Example::
+
         import anthropic
         from dispatch_agents import llm
 
@@ -993,7 +1003,8 @@ async def log_response(
     Raises:
         ValueError: If the response type is not recognized
 
-    Example:
+    Example::
+
         from dispatch_agents import llm
 
         # Works with OpenAI

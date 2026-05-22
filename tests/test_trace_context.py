@@ -5,24 +5,32 @@ import asyncio
 import pytest
 
 from dispatch_agents import BasePayload
+from dispatch_agents._models import ErrorPayload, SuccessPayload, TopicMessage
+from dispatch_agents.events import (
+    _HANDLER_METADATA as HANDLER_METADATA,
+)
+from dispatch_agents.events import (
+    _REGISTERED_HANDLERS as REGISTERED_HANDLERS,
+)
+from dispatch_agents.events import (
+    _TOPIC_HANDLERS as TOPIC_HANDLERS,
+)
 from dispatch_agents.events import (
     _TRACE_CONTEXT_MAX_SIZE,
-    HANDLER_METADATA,
-    REGISTERED_HANDLERS,
-    TOPIC_HANDLERS,
     _current_invocation_id,
     _current_trace_id,
     _register_trace_invocation,
     _trace_invocation_context,
     _unregister_trace_invocation,
-    dispatch_message,
     get_current_invocation_id,
     get_current_trace_id,
     get_invocation_id_for_trace,
     on,
 )
+from dispatch_agents.events import (
+    _dispatch_message as dispatch_message,
+)
 from dispatch_agents.mcp import _build_trace_meta
-from dispatch_agents.models import ErrorPayload, SuccessPayload, TopicMessage
 
 
 class TestTraceContextVariables:

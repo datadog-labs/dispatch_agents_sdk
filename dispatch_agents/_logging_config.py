@@ -117,7 +117,7 @@ def get_logger(name: str | None = None) -> logging.Logger:
     configure_logging()
 
     if name:
-        # Create child logger: dispatch_agents.grpc_server, etc.
+        # Create child logger: dispatch_agents._grpc_server, etc.
         if name.startswith(SDK_LOGGER_NAME):
             return logging.getLogger(name)
         return logging.getLogger(f"{SDK_LOGGER_NAME}.{name}")

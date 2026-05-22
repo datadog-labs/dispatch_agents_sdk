@@ -2,7 +2,7 @@
 
 import pytest
 
-from dispatch_agents.models import Agent, AgentContainerStatus
+from dispatch_agents._models import Agent, AgentContainerStatus
 
 
 class TestAgentBuildUid:

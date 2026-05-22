@@ -3,12 +3,9 @@
 import pytest
 from pydantic import Field
 
-from dispatch_agents import (
-    HANDLER_METADATA,
-    REGISTERED_HANDLERS,
-    BasePayload,
-    fn,
-)
+from dispatch_agents import BasePayload, fn
+from dispatch_agents.events import _HANDLER_METADATA as HANDLER_METADATA
+from dispatch_agents.events import _REGISTERED_HANDLERS as REGISTERED_HANDLERS
 
 
 # Test payload models
@@ -58,7 +55,7 @@ def test_fn_decorator_basic():
     assert "add_numbers" in REGISTERED_HANDLERS
     assert REGISTERED_HANDLERS["add_numbers"] == add_numbers
 
-    # Check metadata was stored (now a HandlerMetadata Pydantic model)
+    # Check metadata was stored as a Pydantic model
     assert "add_numbers" in HANDLER_METADATA
     metadata = HANDLER_METADATA["add_numbers"]
     assert metadata.handler_name == "add_numbers"
@@ -103,7 +100,7 @@ def test_fn_decorator_no_return():
 
     assert "log_data" in REGISTERED_HANDLERS
     metadata = HANDLER_METADATA["log_data"]
-    # output_model not stored in HandlerMetadata, only output_schema
+    # output_model is not stored in metadata, only output_schema
     assert metadata.output_schema is None
 
 
@@ -183,7 +180,7 @@ def test_fn_metadata_on_function():
         """My function doc."""
         return SimpleRequest(data="response")
 
-    # Check _dispatch_metadata attribute (now a HandlerMetadata Pydantic model)
+    # Check _dispatch_metadata attribute
     assert hasattr(my_func, "_dispatch_metadata")
     metadata = my_func._dispatch_metadata  # type: ignore
     assert metadata.handler_name == "my_func"

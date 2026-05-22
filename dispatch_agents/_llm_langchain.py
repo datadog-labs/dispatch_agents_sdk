@@ -4,7 +4,7 @@ Provides a LangChain-compatible ChatModel that uses the Dispatch LLM proxy
 for automatic trace correlation and cost tracking.
 
 Example:
-    from dispatch_agents.llm_langchain import ChatDispatch
+    from dispatch_agents._llm_langchain import ChatDispatch
 
     # Use as a drop-in replacement for ChatOpenAI
     llm = ChatDispatch(model="gpt-4o")
@@ -235,7 +235,7 @@ class ChatDispatch(BaseChatModel):
     when used within a Dispatch agent handler.
 
     Example:
-        from dispatch_agents.llm_langchain import ChatDispatch
+        from dispatch_agents._llm_langchain import ChatDispatch
 
         # Basic usage
         llm = ChatDispatch(model="gpt-4o")

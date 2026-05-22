@@ -14,7 +14,7 @@ def get_data_dir() -> Path:
     """Get the data directory for persistent storage.
 
     In production, this returns /data (EFS mount point).
-    In local dev mode (`dispatch agent dev`), this returns the mock data directory
+    In local dev mode, this returns the mock data directory
     set by DISPATCH_DEV_DATA_DIR environment variable.
 
     Returns:
@@ -161,117 +161,65 @@ def _dev_mode_audit_hook(event: str, args: tuple) -> None:
         raise DisallowedWriteError(f"Write to '{path}' blocked (repeated attempt)")
 
 
-from .agent_service import AgentServiceClient
+from . import llm
+from ._models import (
+    KVGetResponse,
+    KVListResponse,
+    KVMemoryRecord,
+    MemoryWriteResponse,
+    SessionGetResponse,
+)
 from .config import _runtime as config
 from .events import (
-    HANDLER_METADATA,
-    REGISTERED_HANDLERS,
-    TOPIC_HANDLERS,
-    AsyncHandler,
     BasePayload,
-    HandlerMetadata,
-    dispatch_message,
     emit_event,
     fn,
     get_current_invocation_id,
     get_current_parent_id,
     get_current_trace_id,
-    get_handler_metadata,
-    get_handler_schemas,
-    get_invocation_id_for_trace,
     init,
     invoke,
     on,
-    run_init_hook,
 )
-from .invocation import InvocationStatus
-from .llm import LLMFunctionCall, LLMToolCall, extra_headers, get_extra_llm_headers
+from .llm import LLMFunctionCall, LLMToolCall, extra_headers
 from .mcp import McpHttpServerConfig, get_mcp_client, get_mcp_servers_config
-from .memory import MemoryClient, memory
-from .models import (
-    Agent,
-    AgentContainerStatus,
-    BaseMessage,
-    FeedbackSentiment,
-    FeedbackType,
-    FunctionMessage,
-    JsonSchema,
-    KVGetResponse,
-    KVListResponse,
-    KVMemoryRecord,
-    LLMCallMessage,
-    MemoryWriteResponse,
-    Message,
-    ScheduleMessage,
-    SessionGetResponse,
-    StrictBaseModel,
-    TopicMessage,
-)
+from .memory import memory
 
 __all__ = [
     # runtime config
     "config",
-    # storage and dev mode isolation
+    # storage
     "get_data_dir",
     "DisallowedWriteError",
-    # agent service
-    "AgentServiceClient",
-    # events - decorators and client functions
+    # decorators
     "on",
     "init",
     "fn",
+    # communication
     "invoke",
-    "dispatch_message",
     "emit_event",
-    "run_init_hook",
-    # events - context and metadata
+    # context
     "get_current_trace_id",
     "get_current_invocation_id",
     "get_current_parent_id",
-    "get_invocation_id_for_trace",
-    "get_handler_schemas",
-    "get_handler_metadata",
-    # events - registries and types
-    "REGISTERED_HANDLERS",  # handler_name -> AsyncHandler
-    "HANDLER_METADATA",  # handler_name -> HandlerMetadata
-    "TOPIC_HANDLERS",  # topic -> list of handler_names
-    "AsyncHandler",  # Type alias for handler functions
-    "HandlerMetadata",  # Pydantic model for handler metadata
+    # base types
     "BasePayload",
-    # invocation
-    "InvocationStatus",
-    # models - Message types (discriminated union pattern)
-    "BaseMessage",
-    "TopicMessage",
-    "FunctionMessage",
-    "ScheduleMessage",
-    "LLMCallMessage",
-    "Message",  # Union type alias (TopicMessage | FunctionMessage | ScheduleMessage)
-    "Agent",
-    "AgentContainerStatus",
-    "StrictBaseModel",
+    # llm
+    "llm",
+    "LLMFunctionCall",
+    "LLMToolCall",
+    "extra_headers",
     # memory
-    "MemoryClient",
     "memory",
     "MemoryWriteResponse",
     "KVGetResponse",
     "KVListResponse",
     "KVMemoryRecord",
     "SessionGetResponse",
-    # type aliases
-    "JsonSchema",
-    # feedback types
-    "FeedbackType",
-    "FeedbackSentiment",
     # mcp
     "get_mcp_client",
     "get_mcp_servers_config",
     "McpHttpServerConfig",
-    # llm
-    "LLMFunctionCall",
-    "LLMToolCall",
-    "extra_headers",
-    "get_extra_llm_headers",
 ]
 
 # =============================================================================

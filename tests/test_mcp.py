@@ -1,6 +1,6 @@
 """Tests for dispatch_agents.mcp module.
 
-Covers _build_trace_meta, TracingClientSession, and config loading functions.
+Covers _build_trace_meta, _TracingClientSession, and config loading functions.
 """
 
 import json
@@ -9,10 +9,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from dispatch_agents.mcp import (
-    TracingClientSession,
     _build_trace_meta,
     _get_server_config,
     _load_mcp_config,
+    _TracingClientSession,
     get_mcp_servers_config,
 )
 
@@ -55,7 +55,7 @@ class TestBuildTraceMeta:
         assert result == {"dispatch_trace_id": "trace-only"}
 
 
-# ── TracingClientSession ─────────────────────────────────────────────
+# ── _TracingClientSession ────────────────────────────────────────────
 
 
 class TestTracingClientSession:
@@ -68,7 +68,7 @@ class TestTracingClientSession:
         inner = AsyncMock()
         inner.call_tool = AsyncMock(return_value=MagicMock())
 
-        session = TracingClientSession(inner)
+        session = _TracingClientSession(inner)
         await session.call_tool("my_tool", {"arg": "val"})
 
         inner.call_tool.assert_called_once()
@@ -84,7 +84,7 @@ class TestTracingClientSession:
         inner = AsyncMock()
         inner.call_tool = AsyncMock(return_value=MagicMock())
 
-        session = TracingClientSession(inner)
+        session = _TracingClientSession(inner)
         await session.call_tool("my_tool", meta={"user_key": "user_val"})
 
         call_kwargs = inner.call_tool.call_args.kwargs
@@ -97,7 +97,7 @@ class TestTracingClientSession:
         inner = AsyncMock()
         inner.call_tool = AsyncMock(return_value=MagicMock())
 
-        session = TracingClientSession(inner)
+        session = _TracingClientSession(inner)
         await session.call_tool("my_tool", meta={"custom": "data"})
 
         call_kwargs = inner.call_tool.call_args.kwargs
@@ -109,7 +109,7 @@ class TestTracingClientSession:
         inner = AsyncMock()
         inner.call_tool = AsyncMock(return_value=MagicMock())
 
-        session = TracingClientSession(inner)
+        session = _TracingClientSession(inner)
         await session.call_tool("my_tool")
 
         call_kwargs = inner.call_tool.call_args.kwargs
@@ -120,7 +120,7 @@ class TestTracingClientSession:
         inner = AsyncMock()
         inner.list_tools = AsyncMock(return_value=MagicMock())
 
-        session = TracingClientSession(inner)
+        session = _TracingClientSession(inner)
         await session.list_tools()
 
         inner.list_tools.assert_called_once()
@@ -130,7 +130,7 @@ class TestTracingClientSession:
         inner = AsyncMock()
         inner.list_resources = AsyncMock(return_value=MagicMock())
 
-        session = TracingClientSession(inner)
+        session = _TracingClientSession(inner)
         await session.list_resources()
 
         inner.list_resources.assert_called_once()

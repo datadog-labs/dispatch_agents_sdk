@@ -1,4 +1,4 @@
-"""Tests for dispatch_agents.grpc_server module.
+"""Tests for dispatch_agents._grpc_server module.
 
 Covers the testable functions without requiring a running gRPC server.
 """
@@ -11,14 +11,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from dispatch_agents.grpc_server import (
+from dispatch_agents._grpc_server import (
     AgentServiceServicer,
     _is_local_dev_mode,
     _subscribe_registered_triggers,
     _SubscribeLogFilter,
     _subscription_loop,
 )
-from dispatch_agents.models import ErrorPayload
+from dispatch_agents._models import ErrorPayload
 
 # ── _SubscribeLogFilter ──────────────────────────────────────────────
 
@@ -96,10 +96,10 @@ class TestAgentServiceServicer:
         )
 
     @pytest.mark.asyncio
-    @patch("dispatch_agents.grpc_server.dispatch_message")
+    @patch("dispatch_agents._grpc_server._dispatch_message")
     async def test_invoke_function_message(self, mock_dispatch):
         from agentservice.v1 import message_pb2, request_response_pb2
-        from dispatch_agents.models import SuccessPayload
+        from dispatch_agents._models import SuccessPayload
 
         mock_dispatch.return_value = SuccessPayload(result={"answer": 42})
 
@@ -127,10 +127,10 @@ class TestAgentServiceServicer:
         assert call_args.payload == {"query": "hello"}
 
     @pytest.mark.asyncio
-    @patch("dispatch_agents.grpc_server.dispatch_message")
+    @patch("dispatch_agents._grpc_server._dispatch_message")
     async def test_invoke_topic_message(self, mock_dispatch):
         from agentservice.v1 import message_pb2, request_response_pb2
-        from dispatch_agents.models import SuccessPayload
+        from dispatch_agents._models import SuccessPayload
 
         mock_dispatch.return_value = SuccessPayload(result={"ok": True})
 
@@ -157,7 +157,7 @@ class TestAgentServiceServicer:
         assert call_args.payload == {"data": "event"}
 
     @pytest.mark.asyncio
-    @patch("dispatch_agents.grpc_server.dispatch_message")
+    @patch("dispatch_agents._grpc_server._dispatch_message")
     async def test_invoke_error_result(self, mock_dispatch):
         from agentservice.v1 import message_pb2, request_response_pb2
 
@@ -184,7 +184,7 @@ class TestAgentServiceServicer:
         assert response.is_error is True
 
     @pytest.mark.asyncio
-    @patch("dispatch_agents.grpc_server.dispatch_message")
+    @patch("dispatch_agents._grpc_server._dispatch_message")
     async def test_invoke_handler_exception(self, mock_dispatch):
         from agentservice.v1 import message_pb2, request_response_pb2
 
@@ -217,41 +217,41 @@ class TestAgentServiceServicer:
 
 class TestSubscribeRegisteredTriggers:
     @pytest.mark.asyncio
-    @patch("dispatch_agents.grpc_server.HANDLER_METADATA", {})
-    @patch("dispatch_agents.grpc_server.TOPIC_HANDLERS", {})
-    @patch("dispatch_agents.grpc_server.REGISTERED_HANDLERS", {})
+    @patch("dispatch_agents._grpc_server._HANDLER_METADATA", {})
+    @patch("dispatch_agents._grpc_server._TOPIC_HANDLERS", {})
+    @patch("dispatch_agents._grpc_server._REGISTERED_HANDLERS", {})
     async def test_no_handlers_returns_true(self):
         result = await _subscribe_registered_triggers("test-agent")
         assert result is True
 
     @pytest.mark.asyncio
     @patch(
-        "dispatch_agents.grpc_server.HANDLER_METADATA",
+        "dispatch_agents._grpc_server._HANDLER_METADATA",
         {
             "my_fn": MagicMock(
                 topics=[], handler_doc="doc", input_schema={}, output_schema={}
             )
         },
     )
-    @patch("dispatch_agents.grpc_server.TOPIC_HANDLERS", {})
-    @patch("dispatch_agents.grpc_server.REGISTERED_HANDLERS", {"my_fn": AsyncMock()})
+    @patch("dispatch_agents._grpc_server._TOPIC_HANDLERS", {})
+    @patch("dispatch_agents._grpc_server._REGISTERED_HANDLERS", {"my_fn": AsyncMock()})
     async def test_no_backend_url_raises(self, monkeypatch):
         monkeypatch.delenv("BACKEND_URL", raising=False)
         with pytest.raises(RuntimeError, match="BACKEND_URL"):
             await _subscribe_registered_triggers("test-agent")
 
     @pytest.mark.asyncio
-    @patch("dispatch_agents.grpc_server.httpx.AsyncClient")
+    @patch("dispatch_agents._grpc_server.httpx.AsyncClient")
     @patch(
-        "dispatch_agents.grpc_server.HANDLER_METADATA",
+        "dispatch_agents._grpc_server._HANDLER_METADATA",
         {
             "my_fn": MagicMock(
                 topics=[], handler_doc="doc", input_schema={}, output_schema={}
             )
         },
     )
-    @patch("dispatch_agents.grpc_server.TOPIC_HANDLERS", {})
-    @patch("dispatch_agents.grpc_server.REGISTERED_HANDLERS", {"my_fn": AsyncMock()})
+    @patch("dispatch_agents._grpc_server._TOPIC_HANDLERS", {})
+    @patch("dispatch_agents._grpc_server._REGISTERED_HANDLERS", {"my_fn": AsyncMock()})
     async def test_subscribe_success(self, mock_client_cls, monkeypatch):
         monkeypatch.setenv("BACKEND_URL", "http://localhost:8080")
         monkeypatch.delenv("DISPATCH_NAMESPACE", raising=False)
@@ -277,9 +277,9 @@ class TestSubscribeRegisteredTriggers:
         assert "/api/unstable/events/subscribe" in url
 
     @pytest.mark.asyncio
-    @patch("dispatch_agents.grpc_server.httpx.AsyncClient")
+    @patch("dispatch_agents._grpc_server.httpx.AsyncClient")
     @patch(
-        "dispatch_agents.grpc_server.HANDLER_METADATA",
+        "dispatch_agents._grpc_server._HANDLER_METADATA",
         {
             "my_fn": MagicMock(
                 topics=["user.created"],
@@ -289,8 +289,8 @@ class TestSubscribeRegisteredTriggers:
             )
         },
     )
-    @patch("dispatch_agents.grpc_server.TOPIC_HANDLERS", {"user.created": ["my_fn"]})
-    @patch("dispatch_agents.grpc_server.REGISTERED_HANDLERS", {"my_fn": AsyncMock()})
+    @patch("dispatch_agents._grpc_server._TOPIC_HANDLERS", {"user.created": ["my_fn"]})
+    @patch("dispatch_agents._grpc_server._REGISTERED_HANDLERS", {"my_fn": AsyncMock()})
     async def test_subscribe_with_namespace(self, mock_client_cls, monkeypatch):
         monkeypatch.setenv("BACKEND_URL", "http://localhost:8080")
         monkeypatch.setenv("DISPATCH_NAMESPACE", "my-ns")
@@ -314,17 +314,17 @@ class TestSubscribeRegisteredTriggers:
         assert "/api/unstable/namespace/my-ns/events/subscribe" in url
 
     @pytest.mark.asyncio
-    @patch("dispatch_agents.grpc_server.httpx.AsyncClient")
+    @patch("dispatch_agents._grpc_server.httpx.AsyncClient")
     @patch(
-        "dispatch_agents.grpc_server.HANDLER_METADATA",
+        "dispatch_agents._grpc_server._HANDLER_METADATA",
         {
             "my_fn": MagicMock(
                 topics=[], handler_doc="doc", input_schema={}, output_schema={}
             )
         },
     )
-    @patch("dispatch_agents.grpc_server.TOPIC_HANDLERS", {})
-    @patch("dispatch_agents.grpc_server.REGISTERED_HANDLERS", {"my_fn": AsyncMock()})
+    @patch("dispatch_agents._grpc_server._TOPIC_HANDLERS", {})
+    @patch("dispatch_agents._grpc_server._REGISTERED_HANDLERS", {"my_fn": AsyncMock()})
     async def test_connect_error_local_dev_returns_false(
         self, mock_client_cls, monkeypatch
     ):
@@ -342,17 +342,17 @@ class TestSubscribeRegisteredTriggers:
         assert result is False
 
     @pytest.mark.asyncio
-    @patch("dispatch_agents.grpc_server.httpx.AsyncClient")
+    @patch("dispatch_agents._grpc_server.httpx.AsyncClient")
     @patch(
-        "dispatch_agents.grpc_server.HANDLER_METADATA",
+        "dispatch_agents._grpc_server._HANDLER_METADATA",
         {
             "my_fn": MagicMock(
                 topics=[], handler_doc="doc", input_schema={}, output_schema={}
             )
         },
     )
-    @patch("dispatch_agents.grpc_server.TOPIC_HANDLERS", {})
-    @patch("dispatch_agents.grpc_server.REGISTERED_HANDLERS", {"my_fn": AsyncMock()})
+    @patch("dispatch_agents._grpc_server._TOPIC_HANDLERS", {})
+    @patch("dispatch_agents._grpc_server._REGISTERED_HANDLERS", {"my_fn": AsyncMock()})
     async def test_connect_error_production_raises(self, mock_client_cls, monkeypatch):
         monkeypatch.setenv("BACKEND_URL", "http://localhost:8080")
         monkeypatch.delenv("DISPATCH_LOCAL_DEV", raising=False)
@@ -368,17 +368,17 @@ class TestSubscribeRegisteredTriggers:
             await _subscribe_registered_triggers("test-agent")
 
     @pytest.mark.asyncio
-    @patch("dispatch_agents.grpc_server.httpx.AsyncClient")
+    @patch("dispatch_agents._grpc_server.httpx.AsyncClient")
     @patch(
-        "dispatch_agents.grpc_server.HANDLER_METADATA",
+        "dispatch_agents._grpc_server._HANDLER_METADATA",
         {
             "my_fn": MagicMock(
                 topics=[], handler_doc="doc", input_schema={}, output_schema={}
             )
         },
     )
-    @patch("dispatch_agents.grpc_server.TOPIC_HANDLERS", {})
-    @patch("dispatch_agents.grpc_server.REGISTERED_HANDLERS", {"my_fn": AsyncMock()})
+    @patch("dispatch_agents._grpc_server._TOPIC_HANDLERS", {})
+    @patch("dispatch_agents._grpc_server._REGISTERED_HANDLERS", {"my_fn": AsyncMock()})
     async def test_http_status_error_raises(self, mock_client_cls, monkeypatch):
         monkeypatch.setenv("BACKEND_URL", "http://localhost:8080")
         monkeypatch.delenv("DISPATCH_NAMESPACE", raising=False)
@@ -400,17 +400,17 @@ class TestSubscribeRegisteredTriggers:
             await _subscribe_registered_triggers("test-agent")
 
     @pytest.mark.asyncio
-    @patch("dispatch_agents.grpc_server.httpx.AsyncClient")
+    @patch("dispatch_agents._grpc_server.httpx.AsyncClient")
     @patch(
-        "dispatch_agents.grpc_server.HANDLER_METADATA",
+        "dispatch_agents._grpc_server._HANDLER_METADATA",
         {
             "my_fn": MagicMock(
                 topics=[], handler_doc="doc", input_schema={}, output_schema={}
             )
         },
     )
-    @patch("dispatch_agents.grpc_server.TOPIC_HANDLERS", {})
-    @patch("dispatch_agents.grpc_server.REGISTERED_HANDLERS", {"my_fn": AsyncMock()})
+    @patch("dispatch_agents._grpc_server._TOPIC_HANDLERS", {})
+    @patch("dispatch_agents._grpc_server._REGISTERED_HANDLERS", {"my_fn": AsyncMock()})
     async def test_timeout_error_local_dev_returns_false(
         self, mock_client_cls, monkeypatch
     ):
@@ -428,17 +428,17 @@ class TestSubscribeRegisteredTriggers:
         assert result is False
 
     @pytest.mark.asyncio
-    @patch("dispatch_agents.grpc_server.httpx.AsyncClient")
+    @patch("dispatch_agents._grpc_server.httpx.AsyncClient")
     @patch(
-        "dispatch_agents.grpc_server.HANDLER_METADATA",
+        "dispatch_agents._grpc_server._HANDLER_METADATA",
         {
             "my_fn": MagicMock(
                 topics=[], handler_doc="doc", input_schema={}, output_schema={}
             )
         },
     )
-    @patch("dispatch_agents.grpc_server.TOPIC_HANDLERS", {})
-    @patch("dispatch_agents.grpc_server.REGISTERED_HANDLERS", {"my_fn": AsyncMock()})
+    @patch("dispatch_agents._grpc_server._TOPIC_HANDLERS", {})
+    @patch("dispatch_agents._grpc_server._REGISTERED_HANDLERS", {"my_fn": AsyncMock()})
     async def test_timeout_error_production_raises(self, mock_client_cls, monkeypatch):
         monkeypatch.setenv("BACKEND_URL", "http://localhost:8080")
         monkeypatch.delenv("DISPATCH_LOCAL_DEV", raising=False)
@@ -454,17 +454,17 @@ class TestSubscribeRegisteredTriggers:
             await _subscribe_registered_triggers("test-agent")
 
     @pytest.mark.asyncio
-    @patch("dispatch_agents.grpc_server.httpx.AsyncClient")
+    @patch("dispatch_agents._grpc_server.httpx.AsyncClient")
     @patch(
-        "dispatch_agents.grpc_server.HANDLER_METADATA",
+        "dispatch_agents._grpc_server._HANDLER_METADATA",
         {
             "my_fn": MagicMock(
                 topics=[], handler_doc="doc", input_schema={}, output_schema={}
             )
         },
     )
-    @patch("dispatch_agents.grpc_server.TOPIC_HANDLERS", {})
-    @patch("dispatch_agents.grpc_server.REGISTERED_HANDLERS", {"my_fn": AsyncMock()})
+    @patch("dispatch_agents._grpc_server._TOPIC_HANDLERS", {})
+    @patch("dispatch_agents._grpc_server._REGISTERED_HANDLERS", {"my_fn": AsyncMock()})
     async def test_unexpected_error_raises(self, mock_client_cls, monkeypatch):
         monkeypatch.setenv("BACKEND_URL", "http://localhost:8080")
         monkeypatch.delenv("DISPATCH_NAMESPACE", raising=False)
@@ -484,7 +484,7 @@ class TestSubscribeRegisteredTriggers:
 
 class TestSubscriptionLoop:
     @pytest.mark.asyncio
-    @patch("dispatch_agents.grpc_server._subscribe_registered_triggers")
+    @patch("dispatch_agents._grpc_server._subscribe_registered_triggers")
     async def test_initial_success_then_cancel(self, mock_subscribe):
         mock_subscribe.return_value = True
 
@@ -499,8 +499,8 @@ class TestSubscriptionLoop:
         mock_subscribe.assert_called()
 
     @pytest.mark.asyncio
-    @patch("dispatch_agents.grpc_server._is_local_dev_mode", return_value=True)
-    @patch("dispatch_agents.grpc_server._subscribe_registered_triggers")
+    @patch("dispatch_agents._grpc_server._is_local_dev_mode", return_value=True)
+    @patch("dispatch_agents._grpc_server._subscribe_registered_triggers")
     async def test_consecutive_failures_trigger_shutdown(
         self, mock_subscribe, mock_dev
     ):
@@ -513,8 +513,8 @@ class TestSubscriptionLoop:
         assert shutdown_event.is_set()
 
     @pytest.mark.asyncio
-    @patch("dispatch_agents.grpc_server._is_local_dev_mode", return_value=True)
-    @patch("dispatch_agents.grpc_server._subscribe_registered_triggers")
+    @patch("dispatch_agents._grpc_server._is_local_dev_mode", return_value=True)
+    @patch("dispatch_agents._grpc_server._subscribe_registered_triggers")
     async def test_initial_exception_counts_as_failure(self, mock_subscribe, mock_dev):
         # First call raises, second call returns False (in the loop)
         mock_subscribe.side_effect = [RuntimeError("fail"), False]
@@ -526,8 +526,8 @@ class TestSubscriptionLoop:
         assert shutdown_event.is_set()
 
     @pytest.mark.asyncio
-    @patch("dispatch_agents.grpc_server._is_local_dev_mode", return_value=True)
-    @patch("dispatch_agents.grpc_server._subscribe_registered_triggers")
+    @patch("dispatch_agents._grpc_server._is_local_dev_mode", return_value=True)
+    @patch("dispatch_agents._grpc_server._subscribe_registered_triggers")
     async def test_loop_exception_triggers_shutdown(self, mock_subscribe, mock_dev):
         # Initial success, then two exceptions in loop
         call_count = 0

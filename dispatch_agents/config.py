@@ -11,7 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from dispatch_agents.resources import _parse_cpu, _parse_memory
+from dispatch_agents._resources import _parse_cpu, _parse_memory
 
 # Env var names managed by the platform — users must not override these.
 RESERVED_ENV_VARS: frozenset[str] = frozenset(
@@ -334,7 +334,7 @@ class DomainSelector(BaseModel):
     """A single domain selector -- exactly one of match_name or match_pattern.
 
     match_name is an exact FQDN (e.g. api.openai.com).
-    match_pattern is a wildcard prefix (e.g. *.github.com).
+    match_pattern is a wildcard prefix (e.g. ``*.github.com``).
 
     Serialises with camelCase aliases (matchName / matchPattern) to match the
     downstream Cilium FQDN selector API.
@@ -381,7 +381,8 @@ class EgressConfig(BaseModel):
     or matchPattern (wildcard prefix). This is a subset of the
     downstream Cilium FQDN selector API.
 
-    Example:
+    Example::
+
         network:
           egress:
             allow_domains:
@@ -411,7 +412,8 @@ class NetworkConfig(BaseModel):
     restrict the agent's outbound traffic to platform services and any
     listed allow_domains.  When absent, all egress is unrestricted.
 
-    Example:
+    Example::
+
         network:
           egress:
             allow_domains:
@@ -429,7 +431,8 @@ class DispatchConfig(BaseModel):
     It supports validation, serialization, and provides clear documentation
     for all configuration options.
 
-    Example dispatch.yaml:
+    Example dispatch.yaml::
+
         namespace: skunkworks
         agent_name: my-agent
         entrypoint: agent.py

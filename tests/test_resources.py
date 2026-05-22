@@ -2,7 +2,7 @@
 
 import pytest
 
-from dispatch_agents.resources import _parse_cpu, _parse_memory
+from dispatch_agents._resources import _parse_cpu, _parse_memory
 
 
 class TestParseCpu:

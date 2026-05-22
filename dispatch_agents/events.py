@@ -1,5 +1,17 @@
 from __future__ import annotations
 
+__all__ = [
+    "BasePayload",
+    "on",
+    "fn",
+    "init",
+    "invoke",
+    "emit_event",
+    "get_current_trace_id",
+    "get_current_invocation_id",
+    "get_current_parent_id",
+]
+
 import asyncio
 import inspect
 import logging
@@ -24,7 +36,7 @@ from pydantic import BaseModel, ValidationError
 if TYPE_CHECKING:
     from dispatch_agents.integrations.github import GitHubEventPayload
 
-from dispatch_agents.models import (
+from dispatch_agents._models import (
     BaseMessage,
     ErrorPayload,
     FunctionMessage,
@@ -37,7 +49,7 @@ from dispatch_agents.models import (
     TopicMessage,
 )
 
-from .version import get_sdk_version
+from ._version import get_sdk_version
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +82,7 @@ class BasePayload(StrictBaseModel):
     pass
 
 
-class HandlerMetadata(StrictBaseModel):
+class _HandlerMetadata(StrictBaseModel):
     """Serializable handler metadata for registration and introspection.
 
     This model provides type-safe access to handler metadata including
@@ -94,13 +106,13 @@ AsyncHandler = Callable[[BaseModel], Awaitable[BaseModel | None]]
 # Unified handler registry - maps handler_name -> handler function and metadata
 # Used by both @on (topic-based) and @fn (direct call) decorators
 # All handlers can be invoked directly by name; @on handlers additionally have topic triggers
-REGISTERED_HANDLERS: dict[str, AsyncHandler] = {}
-HANDLER_METADATA: dict[str, HandlerMetadata] = {}
+_REGISTERED_HANDLERS: dict[str, AsyncHandler] = {}
+_HANDLER_METADATA: dict[str, _HandlerMetadata] = {}
 
 # Topic-to-handler mapping for efficient topic routing
-# Maps topic -> list of handler_names (used to look up handlers in REGISTERED_HANDLERS)
+# Maps topic -> list of handler_names (used to look up handlers in _REGISTERED_HANDLERS)
 # Multiple handlers can subscribe to the same topic (fan-out pattern)
-TOPIC_HANDLERS: dict[str, list[str]] = {}
+_TOPIC_HANDLERS: dict[str, list[str]] = {}
 
 # Init hook - async function called once when the agent starts
 # Runs in the agent's event loop before handling any requests
@@ -228,6 +240,13 @@ def fn(
     Returns:
         A decorator function that registers the callable while preserving type hints
 
+    Raises:
+        ValueError: If ``name`` (or ``function.__name__``) is already registered
+            by another handler.
+        ValueError: If the handler's first parameter is not annotated with a
+            ``BaseModel`` subclass. Example that triggers this:
+            ``async def f(x: str) -> Result``.
+
     Examples:
         >>> @fn()
         ... async def get_weather(payload: WeatherRequest) -> WeatherResponse:
@@ -240,7 +259,7 @@ def fn(
     def decorator(func: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
         fn_name = name or func.__name__
 
-        if fn_name in REGISTERED_HANDLERS:
+        if fn_name in _REGISTERED_HANDLERS:
             raise ValueError(f"Handler already registered: {fn_name}")
 
         # Extract type information from function signature
@@ -274,7 +293,7 @@ def fn(
         output_model = _extract_return_model(return_type)
 
         # Store unified metadata (type-safe Pydantic model)
-        metadata = HandlerMetadata(
+        metadata = _HandlerMetadata(
             handler_name=fn_name,
             topics=[],  # No topic subscriptions for @fn
             input_schema=input_model.model_json_schema(mode="serialization"),
@@ -288,8 +307,8 @@ def fn(
         func._dispatch_metadata = metadata  # type: ignore
 
         # Register in unified registries
-        HANDLER_METADATA[fn_name] = metadata
-        REGISTERED_HANDLERS[fn_name] = func  # type: ignore[assignment]
+        _HANDLER_METADATA[fn_name] = metadata
+        _REGISTERED_HANDLERS[fn_name] = func  # type: ignore[assignment]
 
         return func
 
@@ -314,7 +333,8 @@ def init(
         The original function (unmodified)
 
     Raises:
-        ValueError: If an init function is already registered
+        TypeError: If ``func`` is not an async function (``async def``).
+        ValueError: If an init function is already registered.
 
     Examples:
         >>> from dispatch_agents.contrib.openai import get_mcp_servers
@@ -391,6 +411,12 @@ def on(
     Handlers registered with @on can also be called directly using invoke() by their
     function name, just like @fn handlers.
 
+    Note:
+        **Fan-out:** Multiple handlers can subscribe to the same topic.  When an event
+        arrives, the platform invokes *all* registered handlers concurrently.  Each
+        handler runs in its own invocation and may succeed or fail independently.
+        Registration order does not determine execution order.
+
     Args:
         topic: The event topic to handle (e.g., "user.created")
         github_event: GitHub event(s) to subscribe to. Mutually exclusive with topic.
@@ -398,6 +424,16 @@ def on(
 
     Returns:
         A decorator function that registers the handler while preserving type hints
+
+    Raises:
+        ValueError: If both ``topic`` and ``github_event`` are specified.
+        ValueError: If neither ``topic`` nor ``github_event`` is specified.
+        ValueError: If the handler name is already registered by another handler.
+        ValueError: If the handler's first parameter is not annotated with a
+            ``BaseModel`` subclass.
+        TypeError: If a ``github_event`` value is not a GitHub event class.
+        TypeError: If ``github_event`` is provided and the handler's payload type
+            is not a base class of all subscribed event classes.
 
     Examples:
         # Subscribe to a custom topic
@@ -451,16 +487,16 @@ def on(
     def decorator(func: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
         handler_name = func.__name__
 
-        if handler_name in REGISTERED_HANDLERS:
+        if handler_name in _REGISTERED_HANDLERS:
             # Handler exists - check if we're just adding more topics to it
-            existing_metadata = HANDLER_METADATA[handler_name]
+            existing_metadata = _HANDLER_METADATA[handler_name]
             for t in topics:
                 if t not in existing_metadata.topics:
                     existing_metadata.topics.append(t)
-                    if t not in TOPIC_HANDLERS:
-                        TOPIC_HANDLERS[t] = []
-                    if handler_name not in TOPIC_HANDLERS[t]:
-                        TOPIC_HANDLERS[t].append(handler_name)
+                    if t not in _TOPIC_HANDLERS:
+                        _TOPIC_HANDLERS[t] = []
+                    if handler_name not in _TOPIC_HANDLERS[t]:
+                        _TOPIC_HANDLERS[t].append(handler_name)
             return func
 
         # Extract type information from function signature
@@ -501,7 +537,7 @@ def on(
         output_model = _extract_return_model(return_type)
 
         # Store unified metadata (type-safe Pydantic model)
-        metadata = HandlerMetadata(
+        metadata = _HandlerMetadata(
             handler_name=handler_name,
             topics=topics,
             input_schema=input_model.model_json_schema(mode="serialization"),
@@ -515,25 +551,25 @@ def on(
         func._dispatch_metadata = metadata  # type: ignore
 
         # Register in unified registries
-        HANDLER_METADATA[handler_name] = metadata
-        REGISTERED_HANDLERS[handler_name] = func  # type: ignore[assignment]
+        _HANDLER_METADATA[handler_name] = metadata
+        _REGISTERED_HANDLERS[handler_name] = func  # type: ignore[assignment]
         for t in topics:
-            if t not in TOPIC_HANDLERS:
-                TOPIC_HANDLERS[t] = []
-            if handler_name not in TOPIC_HANDLERS[t]:
-                TOPIC_HANDLERS[t].append(handler_name)
+            if t not in _TOPIC_HANDLERS:
+                _TOPIC_HANDLERS[t] = []
+            if handler_name not in _TOPIC_HANDLERS[t]:
+                _TOPIC_HANDLERS[t].append(handler_name)
 
         return func
 
     return decorator
 
 
-async def dispatch_message(message: Message) -> SuccessPayload | ErrorPayload:
+async def _dispatch_message(message: Message) -> SuccessPayload | ErrorPayload:
     """
     Called by the agent's gRPC server when a message is received.
     Routes to the appropriate handler based on message type:
-    - TopicMessage: looks up handler via TOPIC_HANDLERS[topic]
-    - FunctionMessage: looks up handler directly via REGISTERED_HANDLERS[function_name]
+    - TopicMessage: looks up handler via _TOPIC_HANDLERS[topic]
+    - FunctionMessage: looks up handler directly via _REGISTERED_HANDLERS[function_name]
 
     All handlers (from @on and @fn) are callable via FunctionMessage.
     TopicMessage routing is maintained for backwards compatibility with existing workflows.
@@ -559,11 +595,14 @@ async def dispatch_message(message: Message) -> SuccessPayload | ErrorPayload:
     try:
         # Route based on message type
         if isinstance(message, TopicMessage):
-            if message.topic not in TOPIC_HANDLERS or not TOPIC_HANDLERS[message.topic]:
+            if (
+                message.topic not in _TOPIC_HANDLERS
+                or not _TOPIC_HANDLERS[message.topic]
+            ):
                 raise ValueError(f"No handler registered for topic: {message.topic}")
-            handler_names = TOPIC_HANDLERS[message.topic]
+            handler_names = _TOPIC_HANDLERS[message.topic]
         elif isinstance(message, FunctionMessage):
-            if message.function_name not in REGISTERED_HANDLERS:
+            if message.function_name not in _REGISTERED_HANDLERS:
                 raise ValueError(f"No handler registered: {message.function_name}")
             handler_names = [message.function_name]
         else:
@@ -574,7 +613,7 @@ async def dispatch_message(message: Message) -> SuccessPayload | ErrorPayload:
         last_result: SuccessPayload | ErrorPayload | None = None
 
         for handler_name in handler_names:
-            func = REGISTERED_HANDLERS[handler_name]
+            func = _REGISTERED_HANDLERS[handler_name]
             # Extract input model from handler function's type hints
             input_model = _get_input_model_from_handler(func)
 
@@ -692,7 +731,7 @@ def get_current_parent_id() -> str | None:
     return _current_parent_id.get()
 
 
-async def run_init_hook() -> None:
+async def _run_init_hook() -> None:
     """Run the registered init hook if present.
 
     Called by the gRPC server before starting to handle requests.
@@ -706,7 +745,7 @@ async def run_init_hook() -> None:
         logger.info(f"Completed @init function: {_INIT_HOOK.__name__}")
 
 
-def get_handler_schemas() -> dict[str, HandlerMetadata]:
+def _get_handler_schemas() -> dict[str, _HandlerMetadata]:
     """Get all registered handler schemas.
 
     Returns a dictionary mapping handler names to their metadata, including
@@ -718,32 +757,32 @@ def get_handler_schemas() -> dict[str, HandlerMetadata]:
     - Schema validation
 
     Returns:
-        Dict mapping handler names to HandlerMetadata with fields:
+        Dict mapping handler names to metadata with fields:
         - handler_name: Name of the handler function
         - input_schema: JSON schema for input payload
         - output_schema: JSON schema for output payload (or None)
         - handler_doc: Docstring from the handler function
         - topics: List of topics this handler subscribes to (empty for @fn)
     """
-    return dict(HANDLER_METADATA)
+    return dict(_HANDLER_METADATA)
 
 
-def get_handler_metadata(topic: str) -> HandlerMetadata | None:
+def _get_handler_metadata(topic: str) -> _HandlerMetadata | None:
     """Get metadata for a specific topic's handler.
 
     Args:
         topic: The topic to get metadata for
 
     Returns:
-        HandlerMetadata for the handler, or None if topic not registered.
+        Metadata for the handler, or None if topic not registered.
         If multiple handlers are registered for the topic, returns the first one's metadata.
     """
-    handler_names = TOPIC_HANDLERS.get(topic)
+    handler_names = _TOPIC_HANDLERS.get(topic)
     if not handler_names:
         return None
     # Return metadata for the first handler
     handler_name = handler_names[0]
-    return HANDLER_METADATA.get(handler_name)
+    return _HANDLER_METADATA.get(handler_name)
 
 
 def _get_router_url() -> str:
@@ -797,7 +836,9 @@ async def emit_event(topic: str, payload: Any, sender_id: str | None = None) -> 
 
     Args:
         topic: The topic/event type to publish to
-        payload: The event payload data
+        payload: The event payload data. If not a ``dict``, wrapped as
+            ``{"data": payload}`` — handlers receiving the event will see
+            this structure. Pass a ``dict`` to control the exact shape.
         sender_id: Optional sender identifier (defaults to current agent)
 
     Returns:

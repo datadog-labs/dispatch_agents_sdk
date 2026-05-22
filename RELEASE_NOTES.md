@@ -1,2 +1,2 @@
-## Bug Fixes
-- Fixed a schema drift issue with the GitHub push webhook integration to ensure incoming webhook payloads are correctly parsed and handled.
+## Other Changes
+- Expanded README documentation for the SDK and all example projects, including setup instructions and usage guidance.

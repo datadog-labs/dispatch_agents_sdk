@@ -3,8 +3,9 @@ import json
 import httpx
 import pytest
 
-from dispatch_agents import BasePayload, dispatch_message, memory, on
-from dispatch_agents.models import SuccessPayload, TopicMessage
+from dispatch_agents import BasePayload, memory, on
+from dispatch_agents._models import SuccessPayload, TopicMessage
+from dispatch_agents.events import _dispatch_message as dispatch_message
 
 
 class GithubEventPayload(BasePayload):

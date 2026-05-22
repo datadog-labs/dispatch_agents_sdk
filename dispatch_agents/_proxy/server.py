@@ -34,7 +34,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from dispatch_agents.proxy.sse_utils import (
+from dispatch_agents._proxy.sse_utils import (
     StreamingUsageCollector,
 )
 
@@ -115,10 +115,12 @@ def _is_not_configured_error(status_code: int, body: bytes) -> bool:
     where the sidecar should fall back to the agent's own API key.
     Does NOT match other 400 errors (budget exceeded, invalid request, etc.).
 
-    The backend /llm/proxy endpoint returns errors in SDK format:
-      OpenAI:    {"error": {"message": "No LLM providers configured..."}}
-      Anthropic: {"type": "error", "error": {"message": "No LLM providers configured..."}}
-    Other backend endpoints use: {"detail": "..."}
+    The backend /llm/proxy endpoint returns errors in SDK format::
+
+        OpenAI:    {"error": {"message": "No LLM providers configured..."}}
+        Anthropic: {"type": "error", "error": {"message": "No LLM providers configured..."}}
+
+    Other backend endpoints use ``{"detail": "..."}``.
     """
     if status_code != 400:
         return False

@@ -21,15 +21,15 @@ from agentservice.v1 import (
     request_response_pb2,
     service_pb2_grpc,
 )
+from dispatch_agents._logging_config import get_logger
+from dispatch_agents._models import ErrorPayload, FunctionMessage, Message, TopicMessage
 from dispatch_agents.events import (
-    HANDLER_METADATA,
-    REGISTERED_HANDLERS,
-    TOPIC_HANDLERS,
-    dispatch_message,
-    run_init_hook,
+    _HANDLER_METADATA,
+    _REGISTERED_HANDLERS,
+    _TOPIC_HANDLERS,
+    _dispatch_message,
+    _run_init_hook,
 )
-from dispatch_agents.logging_config import get_logger
-from dispatch_agents.models import ErrorPayload, FunctionMessage, Message, TopicMessage
 
 logger = get_logger(__name__)
 
@@ -114,8 +114,8 @@ class AgentServiceServicer(service_pb2_grpc.AgentServiceServicer):
             payload_data = json.loads(request.payload.data.decode("utf-8"))
 
             # Create appropriate message type based on message_type field
-            # - "topic": Creates TopicMessage, routes via TOPIC_HANDLERS[topic]
-            # - "function": Creates FunctionMessage, routes via REGISTERED_HANDLERS[function_name]
+            # - "topic": Creates TopicMessage, routes via _TOPIC_HANDLERS[topic]
+            # - "function": Creates FunctionMessage, routes via _REGISTERED_HANDLERS[function_name]
             message: Message
             if request.message_type == "topic":
                 message = TopicMessage(
@@ -140,7 +140,7 @@ class AgentServiceServicer(service_pb2_grpc.AgentServiceServicer):
                 )
 
             # Dispatch the message to the appropriate handler
-            result = await dispatch_message(message)
+            result = await _dispatch_message(message)
 
             # Serialize the result (SuccessPayload or ErrorPayload) to JSON
             is_error = isinstance(result, ErrorPayload)
@@ -215,16 +215,16 @@ async def _subscribe_registered_triggers(
     Raises:
         RuntimeError: If subscription fails and backend is expected to be available
     """
-    topics = list(TOPIC_HANDLERS.keys())
+    topics = list(_TOPIC_HANDLERS.keys())
 
     # Count total handlers (all registered handlers)
     # Topic-based (@on) handlers have topics, callable (@fn) handlers have empty topics
     fn_handlers = [
         name
-        for name, meta in HANDLER_METADATA.items()
+        for name, meta in _HANDLER_METADATA.items()
         if not meta.topics  # @fn handlers have empty topics list
     ]
-    total_handlers = len(REGISTERED_HANDLERS)
+    total_handlers = len(_REGISTERED_HANDLERS)
 
     if total_handlers == 0:
         logger.info("No registered handlers found; skipping subscription.")
@@ -273,12 +273,12 @@ async def _subscribe_registered_triggers(
         )
 
     # Build functions list from unified handler registry
-    from dispatch_agents.models import AgentFunction, FunctionTrigger
+    from dispatch_agents._models import AgentFunction, FunctionTrigger
 
     functions = []
 
-    # All handlers are in HANDLER_METADATA - build functions list from there
-    for handler_name, metadata in HANDLER_METADATA.items():
+    # All handlers are in _HANDLER_METADATA - build functions list from there
+    for handler_name, metadata in _HANDLER_METADATA.items():
         handler_topics = metadata.topics
 
         # Build triggers based on handler type
@@ -512,7 +512,7 @@ async def serve(
     logger.info(f"gRPC server started for agent '{agent_name}' on {listen_addr}")
 
     # Run @init function before handling any requests
-    await run_init_hook()
+    await _run_init_hook()
 
     # Setup signal handlers for graceful shutdown
     loop = asyncio.get_running_loop()

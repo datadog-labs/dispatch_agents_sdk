@@ -1,4 +1,4 @@
-"""Tests for dispatch_agents.llm_langchain module.
+"""Tests for dispatch_agents._llm_langchain module.
 
 Covers the pure helper functions and response conversion without
 needing a running LLM client.
@@ -25,7 +25,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-from dispatch_agents.llm_langchain import (
+from dispatch_agents._llm_langchain import (
     ChatDispatch,
     _convert_message_to_dict,
     _convert_response_to_message,
@@ -290,12 +290,12 @@ class TestConvertResponseToMessage:
 
 
 class TestChatDispatch:
-    @patch("dispatch_agents.llm_langchain.LLMClient")
+    @patch("dispatch_agents._llm_langchain.LLMClient")
     def test_llm_type(self, mock_client_cls):
         llm = ChatDispatch()
         assert llm._llm_type == "dispatch"
 
-    @patch("dispatch_agents.llm_langchain.LLMClient")
+    @patch("dispatch_agents._llm_langchain.LLMClient")
     def test_identifying_params(self, mock_client_cls):
         llm = ChatDispatch(
             model="gpt-4o", provider="openai", temperature=0.5, max_tokens=100
@@ -306,7 +306,7 @@ class TestChatDispatch:
         assert params["temperature"] == 0.5
         assert params["max_tokens"] == 100
 
-    @patch("dispatch_agents.llm_langchain.LLMClient")
+    @patch("dispatch_agents._llm_langchain.LLMClient")
     def test_default_params(self, mock_client_cls):
         llm = ChatDispatch()
         params = llm._identifying_params
