@@ -433,7 +433,6 @@ class DispatchConfig(BaseModel):
         namespace: skunkworks
         agent_name: my-agent
         entrypoint: agent.py
-        base_image: python:3.13-slim
         env:
           LOG_LEVEL: debug
           MY_APP_MODE: production
@@ -464,7 +463,10 @@ class DispatchConfig(BaseModel):
     )
     base_image: str | None = Field(
         default=None,
-        description="Base Docker image for the agent container",
+        description=(
+            "Currently only python:3.13-slim is supported; defaults to it "
+            "when omitted. Other values are rejected at deploy time."
+        ),
     )
     system_packages: list[str] | None = Field(
         default=None,

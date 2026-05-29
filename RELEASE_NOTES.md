@@ -1,2 +1,2 @@
 ## Bug Fixes
-- Fixed a schema drift issue with the GitHub push webhook integration to ensure incoming webhook payloads are correctly parsed and handled.
+- Custom `base_image` configurations are now explicitly rejected with an error rather than silently ignored, providing clearer feedback when unsupported options are supplied.

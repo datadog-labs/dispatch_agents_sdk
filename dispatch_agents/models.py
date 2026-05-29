@@ -19,6 +19,13 @@ from typing import Annotated, Any, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+_IDENTIFIER_PATTERN = r"^[a-zA-Z0-9._-]+$"
+_IDENTIFIER_MAX_LENGTH = 128
+Identifier: TypeAlias = Annotated[
+    str,
+    Field(min_length=1, max_length=_IDENTIFIER_MAX_LENGTH, pattern=_IDENTIFIER_PATTERN),
+]
+
 
 def get_now_utc() -> str:
     """Get the current UTC time in ISO8601 format."""
@@ -391,7 +398,7 @@ class AgentFunction(StrictBaseModel):
     the triggers that can invoke it (topics, schedules, etc.).
     """
 
-    name: str = Field(description="Handler function name")
+    name: Identifier = Field(description="Handler function name")
     description: str | None = Field(
         default=None, description="Handler docstring or description"
     )
@@ -627,9 +634,9 @@ class PublishEventBody(StrictBaseModel):
 class SubscriptionBody(StrictBaseModel):
     """Request body for agent subscription management."""
 
-    topics: list[str]
-    agent_name: str
-    functions: list[AgentFunction] | None = None
+    topics: list[Identifier] = Field(default_factory=list)
+    agent_name: Identifier
+    functions: list[AgentFunction] = Field(min_length=1)
 
 
 class EventRequest(StrictBaseModel):
