@@ -1,12 +1,19 @@
 """Generated agent entrypoint."""
 
 import asyncio
+import logging
+import os
 
 import aiohttp
 import dispatch_agents
 from dispatch_agents import BasePayload, fn, on
-from dispatch_agents.integrations.github import PullRequestReviewCommentCreated
+from dispatch_agents.integrations.github import (
+    CheckSuiteCompleted,
+    PullRequestReviewCommentCreated,
+)
 from pydantic import Field, PositiveInt
+
+logger = logging.getLogger(__name__)
 
 
 class GreetingPayload(BasePayload):
@@ -30,7 +37,7 @@ async def greet(payload: GreetingPayload) -> GreetingResponse:
     - Typed output serialization (returns GreetingResponse)
     - Automatic schema extraction for API documentation
     """
-    print(f"Handling greet request for: {payload.subject}")
+    logger.info("Handling greet request for: %s", payload.subject)
 
     # Validate that subject field exists - ValueError is non-retryable
     if not payload.subject:
@@ -60,13 +67,13 @@ class SleepResponse(BasePayload):
 @dispatch_agents.on(topic="sleep")
 async def sleep(payload: SleepRequest) -> SleepResponse:
     """Sleep for the specified duration, logging countdown progress."""
-    print(f"Starting sleep for {payload.duration_seconds} seconds")
+    logger.info("Starting sleep for %s seconds", payload.duration_seconds)
 
     for remaining in range(payload.duration_seconds, 0, -1):
-        print(f"Countdown: {remaining} seconds remaining")
+        logger.info("Countdown: %s seconds remaining", remaining)
         await asyncio.sleep(1)
 
-    print("Sleep completed")
+    logger.info("Sleep completed")
     return SleepResponse(seconds_slept=payload.duration_seconds)
 
 
@@ -83,14 +90,42 @@ async def on_pr_review_comment(
     event: PullRequestReviewCommentCreated,
 ) -> PRReviewCommentResponse:
     """Handle GitHub PR review comment created events."""
-    print(f"Received PR review comment from {event.comment.user.login}")
-    print(f"Comment body: {event.comment.body[:100]}...")
-    print(f"PR: {event.pull_request.title}")
+    logger.info("Received PR review comment from %s", event.comment.user.login)
+    logger.info("Comment body: %.100s...", event.comment.body)
+    logger.info("PR: %s", event.pull_request.title)
 
     return PRReviewCommentResponse(
         repo=event.repository.full_name,
         user=event.comment.user.login,
         comment=event.comment.body,
+    )
+
+
+class CheckSuiteCompletedResponse(BasePayload):
+    """Response for check_suite.completed events."""
+
+    repo: str | None = Field(description="Repository full name (owner/repo)")
+    head_sha: str = Field(description="Head commit SHA of the suite")
+    conclusion: str | None = Field(
+        description="Suite conclusion (success, failure, ...)"
+    )
+
+
+@on(github_event=CheckSuiteCompleted)
+async def on_check_suite_completed(
+    event: CheckSuiteCompleted,
+) -> CheckSuiteCompletedResponse:
+    """Handle GitHub check_suite.completed events."""
+    logger.info(
+        "Check suite completed: repo=%s sha=%s conclusion=%s",
+        event.repository.full_name if event.repository else None,
+        event.check_suite.head_sha,
+        event.check_suite.conclusion,
+    )
+    return CheckSuiteCompletedResponse(
+        repo=event.repository.full_name if event.repository else None,
+        head_sha=event.check_suite.head_sha,
+        conclusion=event.check_suite.conclusion,
     )
 
 
@@ -109,8 +144,66 @@ class ReverseResponse(BasePayload):
 @fn()
 async def reverse(payload: ReverseRequest) -> ReverseResponse:
     """Reverse the provided text string."""
-    print(f"Reversing: {payload.text!r}")
+    logger.info("Reversing: %r", payload.text)
     return ReverseResponse(reversed_text=payload.text[::-1])
+
+
+class StorageWriteRequest(BasePayload):
+    """Input for writing to persistent storage."""
+
+    key: str = Field(description="Filename to write")
+    value: str = Field(description="Content to write")
+
+
+class StorageWriteResponse(BasePayload):
+    """Output of storage write."""
+
+    path: str = Field(description="Full path of the written file")
+
+
+def _safe_data_path(key: str) -> str:
+    """Resolve a key to a path under /data, rejecting traversal attempts."""
+    path = os.path.abspath(os.path.join("/data", key))
+    if not path.startswith("/data/"):
+        raise ValueError("Invalid key: must resolve within /data")
+    return path
+
+
+@fn()
+async def storage_write(payload: StorageWriteRequest) -> StorageWriteResponse:
+    """Write a value to persistent storage at /data."""
+    path = _safe_data_path(payload.key)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(payload.value)
+    logger.info("Wrote %s bytes to %s", len(payload.value), path)
+    return StorageWriteResponse(path=path)
+
+
+class StorageReadRequest(BasePayload):
+    """Input for reading from persistent storage."""
+
+    key: str = Field(description="Filename to read")
+
+
+class StorageReadResponse(BasePayload):
+    """Output of storage read."""
+
+    value: str | None = Field(description="File content, or null if not found")
+    exists: bool = Field(description="Whether the file exists")
+
+
+@fn()
+async def storage_read(payload: StorageReadRequest) -> StorageReadResponse:
+    """Read a value from persistent storage at /data."""
+    path = _safe_data_path(payload.key)
+    if os.path.exists(path):
+        with open(path) as f:
+            value = f.read()
+        logger.info("Read %s bytes from %s", len(value), path)
+        return StorageReadResponse(value=value, exists=True)
+    logger.info("File not found: %s", path)
+    return StorageReadResponse(value=None, exists=False)
 
 
 class EgressTestRequest(BasePayload):
@@ -140,21 +233,21 @@ async def test_egress(payload: EgressTestRequest) -> EgressTestResponse:
     configured, this request will be blocked unless the target domain is
     in allow_domains.
     """
-    print(f"Testing egress to: {payload.url}")
+    logger.info("Testing egress to: %s", payload.url)
     try:
         async with aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=10)
         ) as session:
             async with session.get(payload.url) as resp:
                 body = await resp.text()
-                print(f"Response: {resp.status} ({len(body)} bytes)")
+                logger.info("Response: %s (%s bytes)", resp.status, len(body))
                 return EgressTestResponse(
                     success=True,
                     status_code=resp.status,
                     body=body[:1000],
                 )
     except Exception as e:
-        print(f"Request failed: {type(e).__name__}: {e}")
+        logger.info("Request failed: %s: %s", type(e).__name__, e)
         return EgressTestResponse(
             success=False,
             body=f"{type(e).__name__}: {e}",

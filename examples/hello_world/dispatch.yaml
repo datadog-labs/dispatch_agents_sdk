@@ -1,9 +1,16 @@
 namespace: examples
 entrypoint: agent.py
-base_image: python:3.13-slim
 system_packages: []
 agent_name: hello-world
+volumes:
+- name: data
+  mountPath: /data
+  mode: read_write_many
 resources:
   limits:
     cpu: 250m
     memory: 2Gi
+network:
+  egress:
+    allow_domains:
+    - match_name: jsonplaceholder.typicode.com

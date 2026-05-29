@@ -1,6 +1,5 @@
 namespace: examples
 entrypoint: agent.py
-base_image: python:3.13-slim
 agent_name: knowledge-base-query
 system_packages:
   - jq
