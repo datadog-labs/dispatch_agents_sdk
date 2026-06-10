@@ -3,12 +3,12 @@
 import pytest
 from pydantic import Field
 
-from dispatch_agents import (
-    HANDLER_METADATA,
-    REGISTERED_HANDLERS,
-    BasePayload,
-    fn,
+from dispatch_agents import BasePayload, fn
+from dispatch_agents.handlers import _HANDLER_METADATA as HANDLER_METADATA
+from dispatch_agents.handlers import (
+    _REGISTERED_HANDLERS as REGISTERED_HANDLERS,
 )
+from dispatch_agents.models import InvocationResult
 
 
 # Test payload models
@@ -58,7 +58,7 @@ def test_fn_decorator_basic():
     assert "add_numbers" in REGISTERED_HANDLERS
     assert REGISTERED_HANDLERS["add_numbers"] == add_numbers
 
-    # Check metadata was stored (now a HandlerMetadata Pydantic model)
+    # Check metadata was stored as a Pydantic model
     assert "add_numbers" in HANDLER_METADATA
     metadata = HANDLER_METADATA["add_numbers"]
     assert metadata.handler_name == "add_numbers"
@@ -103,7 +103,7 @@ def test_fn_decorator_no_return():
 
     assert "log_data" in REGISTERED_HANDLERS
     metadata = HANDLER_METADATA["log_data"]
-    # output_model not stored in HandlerMetadata, only output_schema
+    # output_model is not stored in metadata, only output_schema
     assert metadata.output_schema is None
 
 
@@ -122,18 +122,40 @@ def test_fn_schema_extraction():
 
     metadata = HANDLER_METADATA["calculate"]
 
-    # Check input schema (access via attribute, not dict indexing)
+    # Check input schema (access via attribute, not dict indexing). Narrow the
+    # nested JsonValue to a dict before membership checks.
     input_schema = metadata.input_schema
-    assert input_schema is not None
     assert "properties" in input_schema
-    assert "x" in input_schema["properties"]
-    assert "y" in input_schema["properties"]
+    input_properties = input_schema["properties"]
+    assert isinstance(input_properties, dict)
+    assert "x" in input_properties
+    assert "y" in input_properties
 
     # Check output schema
     output_schema = metadata.output_schema
     assert output_schema is not None
     assert "properties" in output_schema
-    assert "result" in output_schema["properties"]
+    output_properties = output_schema["properties"]
+    assert isinstance(output_properties, dict)
+    assert "result" in output_properties
+
+
+def test_invocation_result_preserves_mapping_compatibility():
+    """Untyped invoke results remain compatible with existing dict-style agents."""
+
+    result = InvocationResult(
+        result={
+            "city": "Los Angeles",
+            "temperature": 72.0,
+        }
+    )
+
+    assert "result" in result
+    assert result["result"] == {"city": "Los Angeles", "temperature": 72.0}
+    assert "city" in result
+    assert result["city"] == "Los Angeles"
+    assert result.get("temperature") == 72.0
+    assert result.get("missing", "default") == "default"
 
 
 # ============================================================================
@@ -183,7 +205,7 @@ def test_fn_metadata_on_function():
         """My function doc."""
         return SimpleRequest(data="response")
 
-    # Check _dispatch_metadata attribute (now a HandlerMetadata Pydantic model)
+    # Check _dispatch_metadata attribute
     assert hasattr(my_func, "_dispatch_metadata")
     metadata = my_func._dispatch_metadata  # type: ignore
     assert metadata.handler_name == "my_func"

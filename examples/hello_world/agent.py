@@ -2,12 +2,12 @@
 
 import asyncio
 import logging
-import os
+from pathlib import Path
 
 import aiohttp
 import dispatch_agents
-from dispatch_agents import BasePayload, fn, on
-from dispatch_agents.integrations.github import (
+from dispatch_agents import BasePayload, fn, get_data_dir, on
+from dispatch_agents.integrations.github.events import (
     CheckSuiteCompleted,
     PullRequestReviewCommentCreated,
 )
@@ -161,23 +161,24 @@ class StorageWriteResponse(BasePayload):
     path: str = Field(description="Full path of the written file")
 
 
-def _safe_data_path(key: str) -> str:
-    """Resolve a key to a path under /data, rejecting traversal attempts."""
-    path = os.path.abspath(os.path.join("/data", key))
-    if not path.startswith("/data/"):
-        raise ValueError("Invalid key: must resolve within /data")
+def _safe_data_path(key: str) -> Path:
+    """Resolve a key under the persistent data directory."""
+    data_dir = get_data_dir().resolve()
+    path = (data_dir / key).resolve()
+    if not path.is_relative_to(data_dir):
+        raise ValueError("Invalid key: must resolve within the data directory")
     return path
 
 
 @fn()
 async def storage_write(payload: StorageWriteRequest) -> StorageWriteResponse:
-    """Write a value to persistent storage at /data."""
+    """Write a value to persistent storage."""
     path = _safe_data_path(payload.key)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as f:
         f.write(payload.value)
     logger.info("Wrote %s bytes to %s", len(payload.value), path)
-    return StorageWriteResponse(path=path)
+    return StorageWriteResponse(path=str(path))
 
 
 class StorageReadRequest(BasePayload):
@@ -195,10 +196,10 @@ class StorageReadResponse(BasePayload):
 
 @fn()
 async def storage_read(payload: StorageReadRequest) -> StorageReadResponse:
-    """Read a value from persistent storage at /data."""
+    """Read a value from persistent storage."""
     path = _safe_data_path(payload.key)
-    if os.path.exists(path):
-        with open(path) as f:
+    if path.exists():
+        with path.open() as f:
             value = f.read()
         logger.info("Read %s bytes from %s", len(value), path)
         return StorageReadResponse(value=value, exists=True)

@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-import dispatch_agents.integrations.github as gh_module
+import dispatch_agents.integrations.github.events as gh_module
 
 SCHEMA_PATH = Path(__file__).parent / "schemas" / "octokit-webhooks.json"
 

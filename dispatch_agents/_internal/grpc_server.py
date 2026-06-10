@@ -21,15 +21,31 @@ from agentservice.v1 import (
     request_response_pb2,
     service_pb2_grpc,
 )
-from dispatch_agents.events import (
-    HANDLER_METADATA,
-    REGISTERED_HANDLERS,
-    TOPIC_HANDLERS,
-    dispatch_message,
-    run_init_hook,
+from dispatch_agents._internal.dispatch import (
+    _dispatch_message,
+    _run_init_hook,
 )
-from dispatch_agents.logging_config import get_logger
-from dispatch_agents.models import ErrorPayload, FunctionMessage, Message, TopicMessage
+from dispatch_agents._internal.logging_config import get_logger
+from dispatch_agents._internal.models import (
+    AgentFunction,
+    ErrorPayload,
+    FunctionMessage,
+    FunctionTrigger,
+    Message,
+    TopicMessage,
+)
+from dispatch_agents._internal.transport import (
+    build_api_base_url as _build_api_base_url,
+)
+from dispatch_agents._internal.transport import (
+    is_local_dev_mode as _is_local_dev_mode,
+)
+from dispatch_agents.config import config as _config
+from dispatch_agents.handlers import (
+    _HANDLER_METADATA,
+    _REGISTERED_HANDLERS,
+    _TOPIC_HANDLERS,
+)
 
 logger = get_logger(__name__)
 
@@ -114,8 +130,8 @@ class AgentServiceServicer(service_pb2_grpc.AgentServiceServicer):
             payload_data = json.loads(request.payload.data.decode("utf-8"))
 
             # Create appropriate message type based on message_type field
-            # - "topic": Creates TopicMessage, routes via TOPIC_HANDLERS[topic]
-            # - "function": Creates FunctionMessage, routes via REGISTERED_HANDLERS[function_name]
+            # - "topic": Creates TopicMessage, routes via _TOPIC_HANDLERS[topic]
+            # - "function": Creates FunctionMessage, routes via _REGISTERED_HANDLERS[function_name]
             message: Message
             if request.message_type == "topic":
                 message = TopicMessage(
@@ -127,8 +143,7 @@ class AgentServiceServicer(service_pb2_grpc.AgentServiceServicer):
                     ts=request.ts,
                     parent_id=None,
                 )
-            else:
-                # Default to function message (for backwards compatibility and direct calls)
+            elif request.message_type == "function":
                 message = FunctionMessage(
                     function_name=request.function_name,
                     payload=payload_data,
@@ -138,9 +153,15 @@ class AgentServiceServicer(service_pb2_grpc.AgentServiceServicer):
                     ts=request.ts,
                     parent_id=None,
                 )
+            else:
+                await context.abort(
+                    grpc.StatusCode.INVALID_ARGUMENT,
+                    f"Unsupported message_type: {request.message_type!r}",
+                )
+                raise RuntimeError("unreachable")
 
             # Dispatch the message to the appropriate handler
-            result = await dispatch_message(message)
+            result = await _dispatch_message(message)
 
             # Serialize the result (SuccessPayload or ErrorPayload) to JSON
             is_error = isinstance(result, ErrorPayload)
@@ -184,19 +205,6 @@ class AgentServiceServicer(service_pb2_grpc.AgentServiceServicer):
         )
 
 
-def _is_local_dev_mode() -> bool:
-    """Check if running in local development mode.
-
-    Returns True only if DISPATCH_LOCAL_DEV is explicitly set to a truthy value.
-    This enables dev-friendly behaviors like auto-shutdown on backend connection failure.
-
-    Note: We use explicit opt-in rather than heuristics (like checking for AWS env vars)
-    because localstack Docker containers should behave like production agents, not dev mode.
-    """
-    local_dev = os.getenv("DISPATCH_LOCAL_DEV", "").lower()
-    return local_dev in ("1", "true", "yes")
-
-
 async def _subscribe_registered_triggers(
     agent_name: str, *, is_initial: bool = False
 ) -> bool:
@@ -215,43 +223,34 @@ async def _subscribe_registered_triggers(
     Raises:
         RuntimeError: If subscription fails and backend is expected to be available
     """
-    topics = list(TOPIC_HANDLERS.keys())
+    topics = list(_TOPIC_HANDLERS.keys())
 
     # Count total handlers (all registered handlers)
     # Topic-based (@on) handlers have topics, callable (@fn) handlers have empty topics
     fn_handlers = [
         name
-        for name, meta in HANDLER_METADATA.items()
+        for name, meta in _HANDLER_METADATA.items()
         if not meta.topics  # @fn handlers have empty topics list
     ]
-    total_handlers = len(REGISTERED_HANDLERS)
+    total_handlers = len(_REGISTERED_HANDLERS)
 
     if total_handlers == 0:
         logger.info("No registered handlers found; skipping subscription.")
         return True  # No handlers = nothing to subscribe, counts as success
 
     # Get backend URL - REQUIRED
-    backend_url = os.getenv("BACKEND_URL")
+    backend_url = os.getenv("DISPATCH_BACKEND_URL")
     if not backend_url:
         error_msg = (
-            "BACKEND_URL environment variable is required but not set. "
+            "DISPATCH_BACKEND_URL environment variable is required but not set. "
             "This should be configured during agent deployment."
         )
         logger.error(error_msg)
         raise RuntimeError(error_msg)
 
-    # Get namespace - optional for backwards compatibility with simple local router
-    namespace = os.getenv("DISPATCH_NAMESPACE")
-    if namespace:
-        # Use namespace-scoped endpoints (backend infrastructure)
-        api_base_url = f"{backend_url}/api/unstable/namespace/{namespace}"
-    else:
-        # Use simple non-namespaced endpoints (local router)
-        api_base_url = f"{backend_url}/api/unstable"
-        logger.info(
-            "DISPATCH_NAMESPACE not set, using non-namespaced endpoints (local router mode)"
-        )
-
+    # Local dev talks to the non-namespaced router; the agent's configured
+    # namespace (from dispatch.yaml) only applies against the deployed backend.
+    api_base_url = _build_api_base_url(backend_url, namespace=_config.namespace)
     url = f"{api_base_url}/events/subscribe"
 
     # Get auth headers - API key is required for deployed agents
@@ -272,13 +271,10 @@ async def _subscribe_registered_triggers(
             "No DISPATCH_API_KEY found in environment (optional for local dev)"
         )
 
-    # Build functions list from unified handler registry
-    from dispatch_agents.models import AgentFunction, FunctionTrigger
-
     functions = []
 
-    # All handlers are in HANDLER_METADATA - build functions list from there
-    for handler_name, metadata in HANDLER_METADATA.items():
+    # All handlers are in _HANDLER_METADATA - build functions list from there
+    for handler_name, metadata in _HANDLER_METADATA.items():
         handler_topics = metadata.topics
 
         # Build triggers based on handler type
@@ -339,7 +335,7 @@ async def _subscribe_registered_triggers(
         error_msg = (
             f"Failed to connect to backend at {url}. "
             f"Connection error: {e}. "
-            f"Ensure BACKEND_URL is set correctly and the backend is accessible."
+            f"Ensure DISPATCH_BACKEND_URL is set correctly and the backend is accessible."
         )
         logger.error(error_msg)
         # Exit with error if we're in a deployed environment (ECS)
@@ -512,7 +508,7 @@ async def serve(
     logger.info(f"gRPC server started for agent '{agent_name}' on {listen_addr}")
 
     # Run @init function before handling any requests
-    await run_init_hook()
+    await _run_init_hook()
 
     # Setup signal handlers for graceful shutdown
     loop = asyncio.get_running_loop()

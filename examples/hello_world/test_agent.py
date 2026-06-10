@@ -1,45 +1,35 @@
-"""Unit tests for hello_world agent handlers."""
+"""Unit tests for hello_world agent handlers.
 
-import agent  # noqa: F401 - Import to register handlers
+The ``@fn()``/``@on()`` decorators return the wrapped function unchanged, so
+handlers are imported and called directly here using only the public SDK
+surface. Input validation that the dispatch layer would perform happens at
+payload construction (Pydantic), so invalid inputs are exercised there.
+"""
+
 import pytest
-from dispatch_agents import dispatch_message
-from dispatch_agents.models import ErrorPayload, SuccessPayload, TopicMessage
+from agent import SleepRequest, SleepResponse, sleep
+from pydantic import ValidationError
 
 
 @pytest.mark.asyncio
 async def test_sleep_basic():
-    """Test basic sleep handler with valid duration."""
-    message = TopicMessage.create(
-        topic="sleep",
-        payload={"duration_seconds": 2},
-        sender_id="test-sender",
-    )
+    """Valid input runs the handler and returns a typed response."""
+    result = await sleep(SleepRequest(duration_seconds=1))
 
-    result = await dispatch_message(message)
-
-    assert isinstance(result, SuccessPayload)
-    assert result.result == {"seconds_slept": 2}
+    assert isinstance(result, SleepResponse)
+    assert result.seconds_slept == 1
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "payload",
     [
-        {"duration_seconds": 0},
+        {"duration_seconds": 0},  # PositiveInt rejects 0
         {"duration_seconds": -5},
-        {},
+        {},  # missing required field
         {"duration_seconds": "not_an_int"},
     ],
 )
-async def test_sleep_validation(payload):
-    """Test that invalid inputs are rejected."""
-    message = TopicMessage.create(
-        topic="sleep",
-        payload=payload,
-        sender_id="test-sender",
-    )
-
-    result = await dispatch_message(message)
-
-    assert isinstance(result, ErrorPayload)
-    assert result.error == "Validation error"
+def test_sleep_validation(payload):
+    """Invalid input is rejected at payload construction."""
+    with pytest.raises(ValidationError):
+        SleepRequest(**payload)

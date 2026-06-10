@@ -12,9 +12,10 @@ from unittest.mock import patch
 
 import httpx
 
-from dispatch_agents.instrument import (
+from dispatch_agents._internal.instrument import (
     _get_context_headers,
     _is_proxy_bound,
+    _patch_requests,
     auto_instrument,
 )
 
@@ -23,21 +24,27 @@ from dispatch_agents.instrument import (
 
 class TestIsProxyBound:
     def test_returns_false_when_no_proxy_host(self):
-        with patch("dispatch_agents.instrument.PROXY_HOST", ""):
+        with patch("dispatch_agents._internal.instrument.PROXY_HOST", ""):
             assert _is_proxy_bound("http://api.openai.com/v1/chat") is False
 
     def test_returns_true_for_matching_url(self):
-        with patch("dispatch_agents.instrument.PROXY_HOST", "http://127.0.0.1:8780"):
+        with patch(
+            "dispatch_agents._internal.instrument.PROXY_HOST", "http://127.0.0.1:8780"
+        ):
             assert _is_proxy_bound("http://127.0.0.1:8780/v1/chat/completions") is True
 
     def test_returns_false_for_non_matching_url(self):
-        with patch("dispatch_agents.instrument.PROXY_HOST", "http://127.0.0.1:8780"):
+        with patch(
+            "dispatch_agents._internal.instrument.PROXY_HOST", "http://127.0.0.1:8780"
+        ):
             assert (
                 _is_proxy_bound("https://api.openai.com/v1/chat/completions") is False
             )
 
     def test_handles_httpx_url_object(self):
-        with patch("dispatch_agents.instrument.PROXY_HOST", "http://127.0.0.1:8780"):
+        with patch(
+            "dispatch_agents._internal.instrument.PROXY_HOST", "http://127.0.0.1:8780"
+        ):
             url = httpx.URL("http://127.0.0.1:8780/v1/chat/completions")
             assert _is_proxy_bound(url) is True
 
@@ -55,7 +62,7 @@ class TestGetContextHeaders:
     def test_includes_trace_id_when_set(self):
         # Patch at the source since _get_context_headers does a local import
         with patch(
-            "dispatch_agents.events.get_current_trace_id",
+            "dispatch_agents._internal.instrument.get_current_trace_id",
             return_value="trace-123",
         ):
             headers = _get_context_headers()
@@ -63,7 +70,7 @@ class TestGetContextHeaders:
 
     def test_includes_invocation_id_when_set(self):
         with patch(
-            "dispatch_agents.events.get_current_invocation_id",
+            "dispatch_agents._internal.instrument.get_current_invocation_id",
             return_value="inv-456",
         ):
             headers = _get_context_headers()
@@ -116,6 +123,11 @@ class TestAutoInstrument:
             auto_instrument()
             assert httpx.Client.send is first_send
 
+    def test_requests_patch_is_optional(self):
+        """Existing requests support must not make requests a required dependency."""
+        with patch.dict("sys.modules", {"requests": None}):
+            _patch_requests()
+
 
 # ── httpx patch behavior ─────────────────────────────────────────────
 
@@ -133,13 +145,16 @@ class TestHttpxPatch:
     def test_sync_send_injects_headers_for_proxy(self):
         """Verify the header injection logic for proxy-bound requests."""
         with (
-            patch("dispatch_agents.instrument.PROXY_HOST", "http://127.0.0.1:8780"),
             patch(
-                "dispatch_agents.events.get_current_trace_id",
+                "dispatch_agents._internal.instrument.PROXY_HOST",
+                "http://127.0.0.1:8780",
+            ),
+            patch(
+                "dispatch_agents._internal.instrument.get_current_trace_id",
                 return_value="trace-abc",
             ),
             patch(
-                "dispatch_agents.events.get_current_invocation_id",
+                "dispatch_agents._internal.instrument.get_current_invocation_id",
                 return_value="inv-xyz",
             ),
         ):
@@ -150,7 +165,9 @@ class TestHttpxPatch:
 
     def test_does_not_inject_for_non_proxy(self):
         """Non-proxy URLs should not get Dispatch headers."""
-        with patch("dispatch_agents.instrument.PROXY_HOST", "http://127.0.0.1:8780"):
+        with patch(
+            "dispatch_agents._internal.instrument.PROXY_HOST", "http://127.0.0.1:8780"
+        ):
             assert (
                 _is_proxy_bound("https://api.openai.com/v1/chat/completions") is False
             )

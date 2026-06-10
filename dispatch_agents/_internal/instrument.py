@@ -10,9 +10,21 @@ Usage:
     Not intended to be called directly by user code.
 """
 
+import json
 import logging
 import os
+import subprocess
+import uuid
 from typing import Any
+
+import httpx
+
+from dispatch_agents._internal.dispatch import (
+    get_current_invocation_id,
+    get_current_trace_id,
+)
+from dispatch_agents.config import config as _config
+from dispatch_agents.llm import get_extra_llm_headers
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +41,7 @@ def _is_proxy_bound(url: Any) -> bool:
 def _get_context_headers() -> dict[str, str]:
     """Build trace context headers from current execution context.
 
-    Reads from contextvars set by dispatch_agents.events during handler
+    Reads from contextvars set during handler
     execution, so headers are automatically scoped to the current invocation.
 
     Also serializes any extra LLM headers (set via extra_headers() context
@@ -37,11 +49,6 @@ def _get_context_headers() -> dict[str, str]:
     they can be forwarded by the sidecar proxy without polluting the
     header namespace.
     """
-    import json
-
-    from .events import get_current_invocation_id, get_current_trace_id
-    from .llm import get_extra_llm_headers
-
     headers: dict[str, str] = {}
 
     trace_id = get_current_trace_id()
@@ -52,7 +59,7 @@ def _get_context_headers() -> dict[str, str]:
     if invocation_id:
         headers["X-Dispatch-Invocation-Id"] = invocation_id
 
-    agent_name = os.environ.get("DISPATCH_AGENT_NAME", "")
+    agent_name = _config.agent_name or ""
     if agent_name:
         headers["X-Dispatch-Agent-Name"] = agent_name
 
@@ -88,11 +95,6 @@ def auto_instrument() -> None:
 
 def _patch_httpx() -> None:
     """Patch httpx.Client.send and httpx.AsyncClient.send."""
-    try:
-        import httpx
-    except ImportError:
-        return
-
     # Patch sync client
     if not getattr(httpx.Client.send, "_dispatch_patched", False):
         _original_sync_send = httpx.Client.send
@@ -147,8 +149,6 @@ def _build_trace_custom_headers() -> str | None:
     The Claude CLI reads this env var and includes the headers on every
     HTTP request it makes to ANTHROPIC_BASE_URL (our sidecar proxy).
     """
-    from .events import get_current_invocation_id, get_current_trace_id
-
     parts: list[str] = []
     trace_id = get_current_trace_id()
     if trace_id:
@@ -179,8 +179,6 @@ def _inject_trace_env(env: dict[str, str] | None) -> dict[str, str] | None:
     if not custom_headers:
         return env
 
-    import uuid
-
     if env is None:
         env = os.environ.copy()
     else:
@@ -204,8 +202,6 @@ def _patch_subprocess() -> None:
     include trace headers in their HTTP requests. ContextVars are read
     at spawn time, so concurrent invocations each get the correct trace_id.
     """
-    import subprocess
-
     if not getattr(subprocess.Popen.__init__, "_dispatch_patched", False):
         _original_init = subprocess.Popen.__init__
 

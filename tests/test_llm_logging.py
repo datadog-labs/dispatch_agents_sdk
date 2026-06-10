@@ -18,6 +18,7 @@ from dispatch_agents.llm import (
     log_openai_response,
     log_response,
 )
+from dispatch_agents.models import JsonValue
 
 # =============================================================================
 # Mock OpenAI Response Objects
@@ -256,14 +257,15 @@ class TestExtractOpenAIResponse:
 
         assert extracted["response_content"] is None
         assert extracted["finish_reason"] == "tool_calls"
-        assert extracted["tool_calls"] is not None
-        assert len(extracted["tool_calls"]) == 1
-        assert extracted["tool_calls"][0]["id"] == "call_abc"
-        assert extracted["tool_calls"][0]["function"]["name"] == "search"
-        assert (
-            extracted["tool_calls"][0]["function"]["arguments"]
-            == '{"query": "weather"}'
-        )
+        tool_calls = extracted["tool_calls"]
+        assert tool_calls is not None
+        assert len(tool_calls) == 1
+        first_call = tool_calls[0]
+        assert first_call["id"] == "call_abc"
+        function = first_call["function"]
+        assert isinstance(function, dict)
+        assert function["name"] == "search"
+        assert function["arguments"] == '{"query": "weather"}'
 
     def test_extraction_empty_choices(self):
         """Test extraction when choices is empty."""
@@ -323,10 +325,14 @@ class TestExtractAnthropicResponse:
         extracted = _extract_anthropic_response(response)
 
         assert extracted["finish_reason"] == "tool_calls"  # tool_use -> tool_calls
-        assert extracted["tool_calls"] is not None
-        assert len(extracted["tool_calls"]) == 1
-        assert extracted["tool_calls"][0]["id"] == "toolu_xyz"
-        assert extracted["tool_calls"][0]["function"]["name"] == "calculator"
+        tool_calls = extracted["tool_calls"]
+        assert tool_calls is not None
+        assert len(tool_calls) == 1
+        first_call = tool_calls[0]
+        assert first_call["id"] == "toolu_xyz"
+        function = first_call["function"]
+        assert isinstance(function, dict)
+        assert function["name"] == "calculator"
 
     def test_stop_reason_mapping(self):
         """Test that Anthropic stop_reason is mapped correctly."""
@@ -398,8 +404,8 @@ class TestLogLLMCall:
     @pytest.mark.asyncio
     @patch("dispatch_agents.llm._get_api_base_url")
     @patch("dispatch_agents.llm._get_auth_headers")
-    @patch("dispatch_agents.llm.get_current_trace_id")
-    @patch("dispatch_agents.llm.get_current_invocation_id")
+    @patch("dispatch_agents.llm._get_current_trace_id")
+    @patch("dispatch_agents.llm._get_current_invocation_id")
     async def test_log_llm_call_basic(
         self,
         mock_inv_id,
@@ -441,8 +447,8 @@ class TestLogLLMCall:
     @pytest.mark.asyncio
     @patch("dispatch_agents.llm._get_api_base_url")
     @patch("dispatch_agents.llm._get_auth_headers")
-    @patch("dispatch_agents.llm.get_current_trace_id")
-    @patch("dispatch_agents.llm.get_current_invocation_id")
+    @patch("dispatch_agents.llm._get_current_trace_id")
+    @patch("dispatch_agents.llm._get_current_invocation_id")
     async def test_log_llm_call_with_explicit_ids(
         self,
         mock_inv_id,
@@ -475,8 +481,8 @@ class TestLogLLMCall:
     @pytest.mark.asyncio
     @patch("dispatch_agents.llm._get_api_base_url")
     @patch("dispatch_agents.llm._get_auth_headers")
-    @patch("dispatch_agents.llm.get_current_trace_id")
-    @patch("dispatch_agents.llm.get_current_invocation_id")
+    @patch("dispatch_agents.llm._get_current_trace_id")
+    @patch("dispatch_agents.llm._get_current_invocation_id")
     async def test_log_llm_call_with_tool_calls(
         self,
         mock_inv_id,
@@ -491,7 +497,7 @@ class TestLogLLMCall:
         mock_trace_id.return_value = None
         mock_inv_id.return_value = None
 
-        tool_calls = [
+        tool_calls: list[dict[str, JsonValue]] = [
             {
                 "id": "call_abc",
                 "type": "function",
@@ -535,7 +541,7 @@ class TestLogOpenAIResponse:
             prompt_tokens=10,
             completion_tokens=5,
         )
-        messages = [{"role": "user", "content": "Test"}]
+        messages: list[dict[str, JsonValue]] = [{"role": "user", "content": "Test"}]
 
         result = await log_openai_response(messages, response)
 
@@ -566,7 +572,7 @@ class TestLogAnthropicResponse:
             input_tokens=15,
             output_tokens=8,
         )
-        messages = [{"role": "user", "content": "Test"}]
+        messages: list[dict[str, JsonValue]] = [{"role": "user", "content": "Test"}]
 
         result = await log_anthropic_response(messages, response)
 
@@ -592,7 +598,7 @@ class TestLogResponse:
         mock_log_openai.return_value = "call-openai"
 
         response = create_mock_openai_response()
-        messages = [{"role": "user", "content": "Test"}]
+        messages: list[dict[str, JsonValue]] = [{"role": "user", "content": "Test"}]
 
         result = await log_response(messages, response)
 
@@ -606,7 +612,7 @@ class TestLogResponse:
         mock_log_anthropic.return_value = "call-anthropic"
 
         response = create_mock_anthropic_response()
-        messages = [{"role": "user", "content": "Test"}]
+        messages: list[dict[str, JsonValue]] = [{"role": "user", "content": "Test"}]
 
         result = await log_response(messages, response)
 
@@ -617,7 +623,7 @@ class TestLogResponse:
     async def test_unknown_response_raises_error(self):
         """Test that unknown response type raises ValueError."""
         unknown_response = MagicMock(spec=[])  # Empty spec, no attributes
-        messages = [{"role": "user", "content": "Test"}]
+        messages: list[dict[str, JsonValue]] = [{"role": "user", "content": "Test"}]
 
         with pytest.raises(ValueError, match="Unrecognized response type"):
             await log_response(messages, unknown_response)

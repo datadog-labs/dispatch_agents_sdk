@@ -5,24 +5,28 @@ import asyncio
 import pytest
 
 from dispatch_agents import BasePayload
-from dispatch_agents.events import (
+from dispatch_agents._internal.dispatch import (
     _TRACE_CONTEXT_MAX_SIZE,
-    HANDLER_METADATA,
-    REGISTERED_HANDLERS,
-    TOPIC_HANDLERS,
     _current_invocation_id,
     _current_trace_id,
     _register_trace_invocation,
     _trace_invocation_context,
     _unregister_trace_invocation,
-    dispatch_message,
     get_current_invocation_id,
     get_current_trace_id,
     get_invocation_id_for_trace,
-    on,
 )
+from dispatch_agents._internal.dispatch import (
+    _dispatch_message as dispatch_message,
+)
+from dispatch_agents._internal.models import ErrorPayload, SuccessPayload, TopicMessage
+from dispatch_agents.handlers import _HANDLER_METADATA as HANDLER_METADATA
+from dispatch_agents.handlers import (
+    _REGISTERED_HANDLERS as REGISTERED_HANDLERS,
+)
+from dispatch_agents.handlers import _TOPIC_HANDLERS as TOPIC_HANDLERS
+from dispatch_agents.handlers import on
 from dispatch_agents.mcp import _build_trace_meta
-from dispatch_agents.models import ErrorPayload, SuccessPayload, TopicMessage
 
 
 class TestTraceContextVariables:
@@ -200,7 +204,7 @@ class TestTraceContextBoundedSize:
     def test_entries_evicted_when_over_limit(self, monkeypatch):
         """Test that oldest entries are evicted when cache exceeds max size."""
         # Use a smaller size for testing
-        import dispatch_agents.events as events_module
+        import dispatch_agents._internal.dispatch as events_module
 
         test_max_size = 100
         monkeypatch.setattr(events_module, "_TRACE_CONTEXT_MAX_SIZE", test_max_size)
@@ -232,7 +236,7 @@ class TestTraceContextBoundedSize:
     def test_multiple_evictions(self, monkeypatch):
         """Test that multiple entries can be evicted correctly."""
         # Use a smaller size for testing
-        import dispatch_agents.events as events_module
+        import dispatch_agents._internal.dispatch as events_module
 
         test_max_size = 100
         monkeypatch.setattr(events_module, "_TRACE_CONTEXT_MAX_SIZE", test_max_size)
@@ -262,7 +266,7 @@ class TestTraceContextBoundedSize:
     def test_updating_existing_entry_moves_to_end(self, monkeypatch):
         """Test that updating an existing entry moves it to most-recently-used."""
         # Use a smaller size for testing
-        import dispatch_agents.events as events_module
+        import dispatch_agents._internal.dispatch as events_module
 
         test_max_size = 100
         monkeypatch.setattr(events_module, "_TRACE_CONTEXT_MAX_SIZE", test_max_size)

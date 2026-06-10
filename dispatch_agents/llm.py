@@ -1,83 +1,86 @@
 """LLM inference client for Dispatch agents.
 
-Provides easy access to LLM inference via the Dispatch proxy with automatic
-trace correlation. LLM calls made inside handler functions (@fn() or @on())
-are automatically correlated with the invocation trace.
+The LLM helpers call providers through the Dispatch proxy and automatically
+correlate calls with the current agent invocation trace when used inside
+``@fn`` or ``@on`` handlers.
 
-IMPORTANT: LLM calls should be made inside handler functions, not at module level.
-Calls made outside handlers won't be associated with any trace.
+LLM calls should be made inside handler functions. Calls made at module import
+time are not associated with a Dispatch invocation trace.
 
-Example:
-    from dispatch_agents import fn, llm
+Example::
 
-    @fn()
-    async def my_handler(payload):
-        # Simple chat (one-off message)
-        response = await llm.chat("What is 2+2?")
-        print(response.content)  # "4"
+    from dispatch_agents import BasePayload, fn, llm
+    from dispatch_agents.llm import parse_json
+    from dispatch_agents.models import LLMMessage
 
-        # With system prompt
-        response = await llm.chat(
-            "Summarize this document",
-            system="You are a helpful assistant that summarizes text concisely."
-        )
-
-        # Full conversation with message history
-        response = await llm.inference([
-            {"role": "system", "content": "You are helpful."},
-            {"role": "user", "content": "Hello!"},
-            {"role": "assistant", "content": "Hi there!"},
-            {"role": "user", "content": "What's the weather?"}
-        ])
-        return response.content
-
-    # With structured output (JSON mode)
-    from pydantic import BaseModel
-
-    class Analysis(BaseModel):
+    class Analysis(BasePayload):
         sentiment: str
         confidence: float
 
-    @fn()
-    async def analyze_sentiment(payload):
-        response = await llm.chat(
-            f"Analyze: {payload.text}",
-            response_format=Analysis
-        )
-        return response.parse_json(Analysis)
+    class TextRequest(BasePayload):
+        text: str
 
-    # With tool calling
+    class ChatRequest(BasePayload):
+        prompt: str
+
     @fn()
-    async def agent_with_tools(payload):
-        tools = [{"type": "function", "function": {"name": "get_weather", ...}}]
-        response = await llm.inference([{"role": "user", "content": payload.query}], tools=tools)
-        if response.tool_calls:
-            for call in response.tool_calls:
-                print(f"Call {call.function.name} with {call.function.arguments}")
+    async def analyze(payload: TextRequest) -> Analysis:
+        response = await llm.chat(
+            payload.text,
+            system="Analyze sentiment and return JSON.",
+            response_format=Analysis,
+        )
+        return parse_json(response, Analysis)
+
+    @fn()
+    async def conversation(payload: ChatRequest) -> str | None:
+        response = await llm.inference([
+            LLMMessage(role="system", content="You are helpful."),
+            LLMMessage(role="user", content=payload.prompt),
+        ])
         return response.content
 """
 
-import os
-from collections.abc import Generator, Sequence
+from __future__ import annotations
+
+import json
+from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, TypeVar, overload
+from typing import Any, TypedDict, TypeVar, overload
 
 import httpx
-from pydantic import BaseModel
 
-BaseModelT = TypeVar("BaseModelT", bound=BaseModel)
-
-from .events import (
-    _get_api_base_url,
-    _get_auth_headers,
-    get_current_invocation_id,
-    get_current_trace_id,
+from dispatch_agents._internal.dispatch import (
+    get_current_invocation_id as _get_current_invocation_id,
 )
+from dispatch_agents._internal.dispatch import (
+    get_current_trace_id as _get_current_trace_id,
+)
+from dispatch_agents._internal.transport import get_api_base_url as _get_api_base_url
+from dispatch_agents._internal.transport import get_auth_headers as _get_auth_headers
+from dispatch_agents.config import config as _config
+from dispatch_agents.models import BasePayload as _BasePayload
+from dispatch_agents.models import JsonObject as _JsonObject
+from dispatch_agents.models import JsonValue as _JsonValue
+from dispatch_agents.models import LLMMessage as _LLMMessage
+from dispatch_agents.models import LLMResponse as _LLMResponse
+from dispatch_agents.models import LLMToolCall as _LLMToolCall
 
-# ContextVar for per-request extra headers to forward to LLM providers.
-# Used by the extra_headers() context manager — async-safe so concurrent
-# handler invocations each get their own copy.
+__all__ = [
+    "LLMClient",
+    "chat",
+    "extra_headers",
+    "get_extra_llm_headers",
+    "inference",
+    "llm",
+    "log_anthropic_response",
+    "log_llm_call",
+    "log_openai_response",
+    "log_response",
+    "parse_json",
+]
+
 _extra_llm_headers: ContextVar[dict[str, str] | None] = ContextVar(
     "extra_llm_headers", default=None
 )
@@ -85,19 +88,21 @@ _extra_llm_headers: ContextVar[dict[str, str] | None] = ContextVar(
 
 @contextmanager
 def extra_headers(headers: dict[str, str]) -> Generator[None, None, None]:
-    """Context manager to attach extra headers to LLM provider requests.
+    """Attach extra headers to LLM provider requests in the current context.
 
-    Headers set here are forwarded through the Dispatch proxy to the
-    underlying LLM provider (e.g., an internal OpenAI-compatible gateway).
-    Nested contexts merge with outer ones; inner keys override outer keys.
+    Headers are forwarded through the Dispatch proxy to the underlying LLM
+    provider. Nested contexts merge with outer contexts; inner keys override
+    outer keys.
 
-    Example:
-        from dispatch_agents import extra_headers
+    Example::
+
+        from dispatch_agents import extra_headers, fn, llm
 
         @fn()
-        async def my_handler(payload):
+        async def answer(payload: Question) -> str | None:
             with extra_headers({"X-Dataset-Id": "team-ml"}):
-                response = await llm.chat("Hello!")  # X-Dataset-Id sent to provider
+                response = await llm.chat(payload.question)
+            return response.content
     """
     current = _extra_llm_headers.get() or {}
     merged = {**current, **headers}
@@ -109,129 +114,127 @@ def extra_headers(headers: dict[str, str]) -> Generator[None, None, None]:
 
 
 def get_extra_llm_headers() -> dict[str, str]:
-    """Return the current extra LLM headers (empty dict if none set)."""
+    """Return the current extra LLM headers, or an empty dict when none are set."""
     return _extra_llm_headers.get() or {}
 
 
-class LLMMessage(BaseModel):
-    """A message in an LLM conversation."""
-
-    role: str  # system, user, assistant, tool
-    content: str | list[dict[str, Any]]
-    name: str | None = None
-    tool_call_id: str | None = None
-
-
-class LLMFunctionCall(BaseModel):
-    """A function call within an LLM tool call."""
-
-    name: str
-    # "arguments" is a JSON-encoded string per the OpenAI chat completions API
-    # (e.g. '{"location": "NYC"}'), not a collection. The singular concept is
-    # "the arguments blob"; the plural name mirrors the upstream API field name.
-    arguments: str
+def _to_json_value(value: object) -> _JsonValue:
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    if isinstance(value, bytes | bytearray):
+        return bytes(value).decode(errors="replace")
+    if isinstance(value, Mapping):
+        return {str(key): _to_json_value(item) for key, item in value.items()}
+    if isinstance(value, Sequence):
+        return [_to_json_value(item) for item in value]
+    return str(value)
 
 
-class LLMToolCall(BaseModel):
-    """A tool call from the LLM response."""
+def _to_json_object(value: object) -> _JsonObject:
+    json_value = _to_json_value(value)
+    if not isinstance(json_value, dict):
+        raise ValueError("Expected JSON object")
+    return json_value
 
-    id: str
-    type: str = "function"
-    function: LLMFunctionCall
+
+# Narrow the return type to the caller's model when ``model`` is supplied
+# (e.g. ``parse_json(resp, Colors) -> Colors``); otherwise it's parsed JSON.
+_ResponseT = TypeVar("_ResponseT", bound=_BasePayload)
 
 
-class LLMResponse(BaseModel):
-    """Response from LLM inference."""
+@overload
+def parse_json(response: _LLMResponse, model: type[_ResponseT]) -> _ResponseT: ...
 
-    llm_call_id: str
-    content: str | None
-    tool_calls: list[LLMToolCall] | None
-    finish_reason: str
-    model: str
-    provider: str
-    variant_name: str | None
-    input_tokens: int
-    output_tokens: int
-    cost_usd: float
-    latency_ms: int
 
-    def __str__(self) -> str:
-        """Return the content for easy string conversion."""
-        return self.content or ""
+@overload
+def parse_json(response: _LLMResponse, model: None = None) -> _JsonValue: ...
 
-    @property
-    def total_tokens(self) -> int:
-        """Total tokens used (input + output)."""
-        return self.input_tokens + self.output_tokens
 
-    # @overload lets type checkers narrow the return type based on whether a
-    # model class is passed:
-    #   response.parse_json(MyModel)  -> MyModel
-    #   response.parse_json()         -> dict[str, Any]
-    #
-    # We use overloads instead of making LLMResponse generic (e.g.
-    # LLMResponse[T]) because LLMResponse is constructed inside inference()
-    # from raw HTTP data — the target model type is only known later at parse
-    # time, not at response construction time.  Pydantic generics require the
-    # type parameter to be bound at class instantiation, which doesn't fit
-    # this deferred-parsing pattern.
-    @overload
-    def parse_json(self, model: type[BaseModelT]) -> BaseModelT: ...
+def parse_json(
+    response: _LLMResponse,
+    model: type[_BasePayload] | None = None,
+) -> _BasePayload | _JsonValue:
+    """Parse an LLM response's JSON content.
 
-    @overload
-    def parse_json(self, model: None = None) -> dict[str, Any]: ...
+    Args:
+        response: LLM response returned by :func:`chat` or :func:`inference`.
+        model: Optional :class:`BasePayload` subclass used to validate and parse
+            the JSON content.
 
-    def parse_json(
-        self, model: type[BaseModel] | None = None
-    ) -> dict[str, Any] | BaseModel:
-        """Parse the response content as JSON.
+    Returns:
+        Parsed JSON value when ``model`` is omitted, otherwise an instance of
+        ``model``.
 
-        Args:
-            model: Optional Pydantic model to validate against
+    Raises:
+        ValueError: If the response has no content.
+        json.JSONDecodeError: If the content is not valid JSON.
+        pydantic.ValidationError: If ``model`` validation fails.
 
-        Returns:
-            Parsed JSON as dict, or validated Pydantic model if provided
+    Example::
 
-        Raises:
-            ValueError: If content is not valid JSON
-        """
-        import json
+        from dispatch_agents import BasePayload
+        from dispatch_agents.llm import chat, parse_json
 
-        if not self.content:
-            raise ValueError("Response has no content to parse")
+        class Colors(BasePayload):
+            colors: list[str]
 
-        data = json.loads(self.content)
-        if model is not None:
-            return model.model_validate(data)
-        return data
+        response = await chat("Return JSON with three primary colors.", response_format=Colors)
+        result = parse_json(response, Colors)
+        print(result.colors)
+    """
+    if not response.content:
+        raise ValueError("Response has no content to parse")
+
+    loaded: object = json.loads(response.content)
+    data = _to_json_value(loaded)
+    if model is not None:
+        return model.model_validate(data)
+    return data
+
+
+def _required_str(data: _JsonObject, key: str) -> str:
+    value = data.get(key)
+    if not isinstance(value, str):
+        raise ValueError(f"LLM response missing string field '{key}'")
+    return value
+
+
+def _optional_str(data: _JsonObject, key: str) -> str | None:
+    value = data.get(key)
+    if value is None or isinstance(value, str):
+        return value
+    raise ValueError(f"LLM response field '{key}' must be a string")
+
+
+def _required_int(data: _JsonObject, key: str) -> int:
+    value = data.get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"LLM response missing integer field '{key}'")
+    return value
+
+
+def _required_float(data: _JsonObject, key: str) -> float:
+    value = data.get(key)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(f"LLM response missing numeric field '{key}'")
+    return float(value)
 
 
 class LLMClient:
-    """Client for LLM inference via Dispatch proxy.
+    """Client for LLM inference via the Dispatch proxy.
 
-    Automatically propagates trace context for correlation with agent invocations.
+    The client can hold default provider settings while individual calls can
+    override them. It automatically propagates Dispatch trace context for
+    observability when called inside a handler.
 
-    Example:
-        from dispatch_agents import llm
+    Example::
 
-        # Simple one-liner
-        response = await llm.chat("What is Python?")
-
-        # With system prompt
-        response = await llm.chat(
+        client = LLMClient(provider="openai", model="gpt-4o")
+        response = await client.chat(
             "Explain quantum computing",
-            system="You explain complex topics simply."
+            system="Explain complex topics simply.",
         )
-
-        # Full conversation history
-        response = await llm.inference([
-            {"role": "system", "content": "You are helpful."},
-            {"role": "user", "content": "Hello!"}
-        ])
-
-        # With structured output
-        response = await llm.chat("List 3 colors", response_format={"type": "json_object"})
-        colors = response.parse_json()
+        print(response.content)
     """
 
     def __init__(
@@ -242,13 +245,13 @@ class LLMClient:
         temperature: float = 1.0,
         max_tokens: int | None = None,
     ) -> None:
-        """Initialize LLM client with optional defaults.
+        """Initialize an LLM client with optional defaults.
 
         Args:
-            model: Default model to use (e.g., "gpt-4o", "claude-3-5-sonnet")
-            provider: Default provider (e.g., "openai", "anthropic")
-            temperature: Default sampling temperature (0-2)
-            max_tokens: Default maximum tokens in response
+            model: Default model, such as ``"gpt-4o"`` or ``"claude-sonnet-4-5"``.
+            provider: Default provider, such as ``"openai"`` or ``"anthropic"``.
+            temperature: Default sampling temperature.
+            max_tokens: Default maximum response tokens.
         """
         self._api_base_url: str | None = None
         self._default_model = model
@@ -257,7 +260,6 @@ class LLMClient:
         self._default_max_tokens = max_tokens
 
     def _ensure_api_base_url(self) -> str:
-        """Lazily initialize API base URL when first needed."""
         if self._api_base_url is None:
             self._api_base_url = _get_api_base_url()
         return self._api_base_url
@@ -271,67 +273,57 @@ class LLMClient:
         provider: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
-        response_format: dict[str, Any] | type[BaseModel] | None = None,
-    ) -> LLMResponse:
-        """Simple chat interface for one-off messages.
-
-        This is the easiest way to call an LLM - just pass a string!
+        response_format: _JsonObject | type[_BasePayload] | None = None,
+    ) -> _LLMResponse:
+        """Send a single user message and return the model response.
 
         Args:
-            message: The user message to send
-            system: Optional system prompt
-            model: Model to use (uses client default or org default if not specified)
-            provider: Provider to use (uses client default or org default if not specified)
-            temperature: Sampling temperature (0-2)
-            max_tokens: Maximum tokens in response
-            response_format: Request structured output. Can be:
-                - {"type": "json_object"} for JSON mode
-                - A Pydantic model class for schema-guided generation
+            message: User message to send.
+            system: Optional system prompt.
+            model: Model to use. Falls back to the client or org default.
+            provider: Provider to route to. Falls back to the client or org default.
+            temperature: Sampling temperature.
+            max_tokens: Maximum response tokens.
+            response_format: Structured output request. Pass
+                ``{"type": "json_object"}`` for JSON mode, or a
+                :class:`BasePayload` subclass for schema-guided generation.
 
         Returns:
-            LLMResponse with content, usage metrics, and cost
+            LLM response with content, tool calls, usage, cost, and latency.
 
-        Example:
-            # Basic
+        Example::
+
             response = await llm.chat("What is 2+2?")
             print(response.content)
 
-            # With system prompt
-            response = await llm.chat(
-                "Summarize this text",
-                system="You summarize text in exactly 3 bullet points."
-            )
+        Example::
 
-            # Structured output with Pydantic model
-            class Colors(BaseModel):
+            class Colors(BasePayload):
                 colors: list[str]
 
             response = await llm.chat(
-                "List 3 primary colors",
-                response_format=Colors
+                "List three primary colors as JSON.",
+                response_format=Colors,
             )
-            result = response.parse_json(Colors)
-            print(result.colors)  # ['red', 'blue', 'yellow']
+            colors = parse_json(response, Colors)
         """
-        messages: list[dict[str, Any]] = []
+        messages: list[_LLMMessage] = []
         if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": message})
+            messages.append(_LLMMessage(role="system", content=system))
+        messages.append(_LLMMessage(role="user", content=message))
 
-        # Handle response_format - convert Pydantic model to JSON schema
-        format_dict: dict[str, Any] | None = None
+        format_dict: _JsonObject | None = None
         if response_format is not None:
             if isinstance(response_format, dict):
                 format_dict = response_format
             elif isinstance(response_format, type) and issubclass(
-                response_format, BaseModel
+                response_format, _BasePayload
             ):
-                # Convert Pydantic model to JSON schema
                 format_dict = {
                     "type": "json_schema",
                     "json_schema": {
                         "name": response_format.__name__,
-                        "schema": response_format.model_json_schema(),
+                        "schema": _to_json_object(response_format.model_json_schema()),
                     },
                 }
 
@@ -346,74 +338,64 @@ class LLMClient:
 
     async def inference(
         self,
-        messages: Sequence[dict[str, Any] | LLMMessage],
+        messages: Sequence[_LLMMessage],
         *,
         model: str | None = None,
         provider: str | None = None,
-        tools: list[dict[str, Any]] | None = None,
+        tools: Sequence[_JsonObject] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
-        response_format: dict[str, Any] | None = None,
+        response_format: _JsonObject | None = None,
         trace_id: str | None = None,
         invocation_id: str | None = None,
         extra_headers: dict[str, str] | None = None,
-    ) -> LLMResponse:
-        """Execute LLM inference via Dispatch proxy.
-
-        Automatically includes trace context from the current execution for
-        correlation with agent invocations in observability tools.
+    ) -> _LLMResponse:
+        """Execute LLM inference over a typed message sequence.
 
         Args:
-            messages: Conversation messages (list of dicts with role/content)
-            model: Model to use (e.g., "gpt-4o", "claude-sonnet-4-5").
-                   If omitted, falls back to the provider's configured default_model.
-            provider: Provider to route the request to (e.g., "openai", "anthropic").
-                      If omitted, falls back to the org's ``default_provider``.
-                      If no default is configured, the request will fail with an error.
-                      **Tip:** always pass ``provider=`` explicitly when you pass
-                      ``model=`` to avoid accidentally sending a model name to the
-                      wrong provider.
-            tools: Tool definitions for function calling
-            temperature: Sampling temperature (0-2). Uses client default if not specified.
-            max_tokens: Maximum tokens in response. Uses client default if not specified.
-            response_format: Request structured output format (e.g., {"type": "json_object"})
-            trace_id: Override trace ID (auto-detected from handler context if not provided)
-            invocation_id: Override invocation ID (auto-detected from handler context if not provided).
-                          This links the LLM call to its parent invocation in the trace tree.
+            messages: Conversation messages as public ``LLMMessage`` models.
+            model: Model to use. If omitted, falls back to the provider default.
+            provider: Provider to route to. When passing ``model``, pass
+                ``provider`` too so the model is sent to the intended provider.
+            tools: Tool definitions for function calling.
+            temperature: Sampling temperature.
+            max_tokens: Maximum response tokens.
+            response_format: Structured output format, such as
+                ``{"type": "json_object"}``.
+            trace_id: Optional trace ID override. Auto-detected from handler
+                context when omitted.
+            invocation_id: Optional invocation ID override. Auto-detected from
+                handler context when omitted.
+            extra_headers: Extra provider headers for this request.
 
         Returns:
-            LLMResponse with content, usage metrics, and cost
+            LLM response with content, tool calls, usage, cost, and latency.
 
         Raises:
-            httpx.HTTPStatusError: If the request fails
-            RuntimeError: If DISPATCH_NAMESPACE is not set
+            httpx.HTTPStatusError: If the LLM proxy rejects the request.
+            RuntimeError: If required Dispatch runtime configuration is missing.
 
-        Example:
-            response = await llm_client.inference([
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": "What is 2+2?"}
+        Example::
+
+            from dispatch_agents.models import LLMMessage
+
+            response = await llm.inference([
+                LLMMessage(role="system", content="You are helpful."),
+                LLMMessage(role="user", content="What is 2+2?"),
             ])
-            print(f"Answer: {response.content}")
-            print(f"Cost: ${response.cost_usd:.4f}")
+            print(response.content)
         """
         api_base_url = self._ensure_api_base_url()
 
-        # Convert LLMMessage objects to dicts
-        message_dicts = []
+        messages_payload: list[_JsonValue] = []
         for msg in messages:
-            if isinstance(msg, LLMMessage):
-                message_dicts.append(msg.model_dump(exclude_none=True))
-            else:
-                message_dicts.append(msg)
+            messages_payload.append(_to_json_object(msg.model_dump(exclude_none=True)))
 
-        # Auto-detect context from current execution if not provided
-        # This enables automatic trace correlation when called from within a handler
         if trace_id is None:
-            trace_id = get_current_trace_id()
+            trace_id = _get_current_trace_id()
         if invocation_id is None:
-            invocation_id = get_current_invocation_id()
+            invocation_id = _get_current_invocation_id()
 
-        # Apply client defaults
         effective_model = model if model is not None else self._default_model
         effective_provider = (
             provider if provider is not None else self._default_provider
@@ -425,12 +407,10 @@ class LLMClient:
             max_tokens if max_tokens is not None else self._default_max_tokens
         )
 
-        # Build request payload
-        payload: dict[str, Any] = {
-            "messages": message_dicts,
+        payload: _JsonObject = {
+            "messages": messages_payload,
         }
 
-        # Only include temperature if we have a value
         if effective_temperature is not None:
             payload["temperature"] = effective_temperature
         if effective_model is not None:
@@ -438,7 +418,9 @@ class LLMClient:
         if effective_provider is not None:
             payload["provider"] = effective_provider
         if tools is not None:
-            payload["tools"] = tools
+            tools_payload: list[_JsonValue] = []
+            tools_payload.extend(tools)
+            payload["tools"] = tools_payload
         if effective_max_tokens is not None:
             payload["max_tokens"] = effective_max_tokens
         if response_format is not None:
@@ -448,13 +430,11 @@ class LLMClient:
         if invocation_id is not None:
             payload["invocation_id"] = invocation_id
 
-        # Include agent name for cost tracking and budget enforcement
-        agent_name = os.environ.get("DISPATCH_AGENT_NAME")
+        agent_name = _config.agent_name
         if agent_name:
             payload["agent_name"] = agent_name
 
-        # Merge extra headers: ContextVar first, then explicit param overrides
-        merged_headers = {**get_extra_llm_headers()}
+        merged_headers: dict[str, _JsonValue] = {**get_extra_llm_headers()}
         if extra_headers:
             merged_headers.update(extra_headers)
         if merged_headers:
@@ -468,7 +448,7 @@ class LLMClient:
                 url,
                 json=payload,
                 headers=auth_headers,
-                timeout=600.0,  # 10min — matches ALB idle timeout for long-context LLM calls
+                timeout=600.0,
             )
             if response.status_code >= 400:
                 try:
@@ -481,33 +461,36 @@ class LLMClient:
                     request=response.request,
                     response=response,
                 )
-            data = response.json()
+            data = _to_json_object(response.json())
 
-        # Parse tool calls if present
         tool_calls = None
-        if data.get("tool_calls"):
-            tool_calls = [LLMToolCall(**tc) for tc in data["tool_calls"]]
+        raw_tool_calls = data.get("tool_calls")
+        if isinstance(raw_tool_calls, list):
+            tool_calls = []
+            for raw_tool_call in raw_tool_calls:
+                if not isinstance(raw_tool_call, dict):
+                    raise ValueError("LLM response tool_calls must contain objects")
+                tool_calls.append(_LLMToolCall.model_validate(raw_tool_call))
 
-        return LLMResponse(
-            llm_call_id=data["llm_call_id"],
-            content=data.get("content"),
+        return _LLMResponse(
+            llm_call_id=_required_str(data, "llm_call_id"),
+            content=_optional_str(data, "content"),
             tool_calls=tool_calls,
-            finish_reason=data["finish_reason"],
-            model=data["model"],
-            provider=data["provider"],
-            variant_name=data.get("variant_name"),
-            input_tokens=data["input_tokens"],
-            output_tokens=data["output_tokens"],
-            cost_usd=data["cost_usd"],
-            latency_ms=data["latency_ms"],
+            finish_reason=_required_str(data, "finish_reason"),
+            model=_required_str(data, "model"),
+            provider=_required_str(data, "provider"),
+            variant_name=_optional_str(data, "variant_name"),
+            input_tokens=_required_int(data, "input_tokens"),
+            output_tokens=_required_int(data, "output_tokens"),
+            cost_usd=_required_float(data, "cost_usd"),
+            latency_ms=_required_int(data, "latency_ms"),
         )
 
 
-# Module-level singleton for convenient access
 llm = LLMClient()
+"""Singleton LLM client."""
 
 
-# Convenience functions for direct usage
 async def chat(
     message: str,
     *,
@@ -516,24 +499,11 @@ async def chat(
     provider: str | None = None,
     temperature: float | None = None,
     max_tokens: int | None = None,
-    response_format: dict[str, Any] | type[BaseModel] | None = None,
-) -> LLMResponse:
-    """Simple chat interface for one-off messages.
+    response_format: _JsonObject | type[_BasePayload] | None = None,
+) -> _LLMResponse:
+    """Send a single user message with the singleton LLM client.
 
-    This is a convenience function that uses the module-level singleton.
-    See LLMClient.chat() for full documentation.
-
-    Example:
-        from dispatch_agents.llm import chat
-
-        response = await chat("What is 2+2?")
-        print(response.content)
-
-        # With system prompt
-        response = await chat(
-            "Explain quantum computing",
-            system="You explain complex topics simply."
-        )
+    See :meth:`LLMClient.chat` for parameters, return value, and examples.
     """
     return await llm.chat(
         message,
@@ -547,30 +517,21 @@ async def chat(
 
 
 async def inference(
-    messages: Sequence[dict[str, Any] | LLMMessage],
+    messages: Sequence[_LLMMessage],
     *,
     model: str | None = None,
     provider: str | None = None,
-    tools: list[dict[str, Any]] | None = None,
+    tools: Sequence[_JsonObject] | None = None,
     temperature: float | None = None,
     max_tokens: int | None = None,
-    response_format: dict[str, Any] | None = None,
+    response_format: _JsonObject | None = None,
     trace_id: str | None = None,
     invocation_id: str | None = None,
     extra_headers: dict[str, str] | None = None,
-) -> LLMResponse:
-    """Execute LLM inference via Dispatch proxy.
+) -> _LLMResponse:
+    """Execute LLM inference with the singleton LLM client.
 
-    This is a convenience function that uses the module-level singleton.
-    See LLMClient.inference() for full documentation.
-
-    Example:
-        from dispatch_agents.llm import inference
-
-        response = await inference([
-            {"role": "user", "content": "Hello!"}
-        ])
-        print(response.content)
+    See :meth:`LLMClient.inference` for parameters, return value, and examples.
     """
     return await llm.inference(
         messages,
@@ -586,15 +547,27 @@ async def inference(
     )
 
 
+class _ExtractedResponse(TypedDict):
+    """Fields pulled from a provider SDK response, ready for ``log_llm_call``."""
+
+    response_content: str | None
+    model: str
+    provider: str
+    input_tokens: int
+    output_tokens: int
+    tool_calls: list[_JsonObject] | None
+    finish_reason: str
+
+
 async def log_llm_call(
-    input_messages: Sequence[dict[str, Any] | LLMMessage],
+    input_messages: Sequence[_JsonObject | _LLMMessage],
     response_content: str | None = None,
     *,
     model: str,
     provider: str,
     input_tokens: int,
     output_tokens: int,
-    tool_calls: list[dict[str, Any]] | None = None,
+    tool_calls: list[_JsonObject] | None = None,
     finish_reason: str = "stop",
     latency_ms: int | None = None,
     trace_id: str | None = None,
@@ -602,81 +575,26 @@ async def log_llm_call(
 ) -> str:
     """Log an LLM call made to an external service for trace correlation.
 
-    IMPORTANT: You do NOT need this function if you use Dispatch's built-in LLM client!
-    The llm.chat() and llm.inference() functions automatically log calls for you.
+    You do not need this function when using Dispatch's built-in LLM client:
+    :func:`chat` and :func:`inference` log calls automatically.
 
-    This function is ONLY needed when you call LLM providers directly using their
-    SDKs (OpenAI, Anthropic, etc.) instead of Dispatch's llm.chat()/inference() proxy.
-    It enables those external calls to appear in Dispatch traces alongside other
-    agent activity.
-
-    When to use this function:
-    - You're using the OpenAI SDK directly for streaming or advanced features
-    - You have existing code using provider SDKs that you don't want to migrate
-    - You need features not yet supported by Dispatch's LLM client
-
-    When NOT to use this function:
-    - You're using llm.chat() or llm.inference() - they log automatically!
-
-    Args:
-        input_messages: The conversation messages sent to the LLM (full context, not deltas)
-        response_content: The text content of the LLM's response
-        model: Model used (e.g., "gpt-4o", "claude-3-5-sonnet-20241022")
-        provider: Provider name (e.g., "openai", "anthropic")
-        input_tokens: Number of input tokens
-        output_tokens: Number of output tokens
-        tool_calls: Tool/function calls returned by the LLM (optional)
-        finish_reason: Reason the generation stopped (default: "stop")
-        latency_ms: Time taken in milliseconds (optional)
-        trace_id: Override trace ID (auto-detected from handler context if not provided)
-        invocation_id: Override invocation ID (auto-detected from handler context)
-
-    Returns:
-        The llm_call_id assigned to this logged call
-
-    Example:
-        # Using OpenAI client directly (only do this if you need features
-        # not available in llm.chat(), otherwise just use llm.chat()!)
-        from openai import AsyncOpenAI
-        from dispatch_agents import llm
-
-        client = AsyncOpenAI()
-        messages = [{"role": "user", "content": "Hello!"}]
-
-        # Make the call directly to OpenAI
-        response = await client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-        )
-
-        # Log it to Dispatch for trace visibility
-        await llm.log_llm_call(
-            input_messages=messages,
-            response_content=response.choices[0].message.content,
-            model="gpt-4o-mini",
-            provider="openai",
-            input_tokens=response.usage.prompt_tokens,
-            output_tokens=response.usage.completion_tokens,
-            finish_reason=response.choices[0].finish_reason,
-        )
+    Use this when calling LLM providers directly through their SDKs so those
+    calls appear in Dispatch traces alongside other agent activity.
     """
     api_base_url = _get_api_base_url()
 
-    # Convert LLMMessage objects to dicts
-    message_dicts = []
+    message_dicts: list[_JsonObject] = []
     for msg in input_messages:
-        if isinstance(msg, LLMMessage):
+        if isinstance(msg, _LLMMessage):
             message_dicts.append(msg.model_dump(exclude_none=True))
         else:
             message_dicts.append(msg)
 
-    # Auto-detect context from current execution if not provided
     if trace_id is None:
-        trace_id = get_current_trace_id()
+        trace_id = _get_current_trace_id()
     if invocation_id is None:
-        invocation_id = get_current_invocation_id()
+        invocation_id = _get_current_invocation_id()
 
-    # Build request payload
     payload: dict[str, Any] = {
         "input_messages": message_dicts,
         "response_content": response_content,
@@ -696,8 +614,7 @@ async def log_llm_call(
     if invocation_id is not None:
         payload["invocation_id"] = invocation_id
 
-    # Include agent name for cost tracking
-    agent_name = os.environ.get("DISPATCH_AGENT_NAME")
+    agent_name = _config.agent_name
     if agent_name:
         payload["agent_name"] = agent_name
 
@@ -717,31 +634,12 @@ async def log_llm_call(
     return data["llm_call_id"]
 
 
-# =============================================================================
-# Ergonomic helpers for popular SDKs
-# =============================================================================
-# These functions auto-extract fields from SDK response objects so users
-# don't have to manually pull out tokens, content, etc.
-
-
-def _extract_openai_response(response: Any) -> dict[str, Any]:
-    """Extract fields from an OpenAI ChatCompletion response.
-
-    Works with both sync and async OpenAI SDK responses.
-
-    Args:
-        response: OpenAI ChatCompletion object
-
-    Returns:
-        Dict with extracted fields for log_llm_call()
-    """
+def _extract_openai_response(response: Any) -> _ExtractedResponse:
+    """Extract log_llm_call() fields from an OpenAI ChatCompletion response."""
     choice = response.choices[0] if response.choices else None
     message = choice.message if choice else None
-
-    # Extract content
     content = message.content if message else None
 
-    # Extract tool calls (OpenAI format)
     tool_calls = None
     if message and message.tool_calls:
         tool_calls = [
@@ -767,16 +665,8 @@ def _extract_openai_response(response: Any) -> dict[str, Any]:
     }
 
 
-def _extract_anthropic_response(response: Any) -> dict[str, Any]:
-    """Extract fields from an Anthropic Message response.
-
-    Args:
-        response: Anthropic Message object
-
-    Returns:
-        Dict with extracted fields for log_llm_call()
-    """
-    # Extract text content (Anthropic uses content blocks)
+def _extract_anthropic_response(response: Any) -> _ExtractedResponse:
+    """Extract log_llm_call() fields from an Anthropic Message response."""
     content = None
     tool_calls = None
 
@@ -785,10 +675,8 @@ def _extract_anthropic_response(response: Any) -> dict[str, Any]:
         tool_use_blocks = []
 
         for block in response.content:
-            # Duck type check for text block
             if hasattr(block, "text"):
                 text_blocks.append(block.text)
-            # Duck type check for tool_use block
             elif hasattr(block, "type") and block.type == "tool_use":
                 tool_use_blocks.append(
                     {
@@ -810,7 +698,6 @@ def _extract_anthropic_response(response: Any) -> dict[str, Any]:
         if tool_use_blocks:
             tool_calls = tool_use_blocks
 
-    # Map Anthropic stop_reason to standard finish_reason
     finish_reason_map = {
         "end_turn": "stop",
         "stop_sequence": "stop",
@@ -851,47 +738,15 @@ def _is_anthropic_response(response: Any) -> bool:
 
 
 async def log_openai_response(
-    input_messages: Sequence[dict[str, Any]],
+    input_messages: Sequence[_JsonObject],
     response: Any,
     *,
     latency_ms: int | None = None,
     trace_id: str | None = None,
     invocation_id: str | None = None,
 ) -> str:
-    """Log an OpenAI ChatCompletion response for trace correlation.
-
-    This is a convenience wrapper around log_llm_call() that automatically
-    extracts fields from the OpenAI response object.
-
-    IMPORTANT: You do NOT need this if you use llm.chat() - it logs automatically!
-
-    Args:
-        input_messages: The messages array you sent to OpenAI
-        response: The ChatCompletion response from OpenAI
-        latency_ms: Time taken in milliseconds (optional)
-        trace_id: Override trace ID (auto-detected from handler context)
-        invocation_id: Override invocation ID (auto-detected from handler context)
-
-    Returns:
-        The llm_call_id assigned to this logged call
-
-    Example:
-        from openai import AsyncOpenAI
-        from dispatch_agents import llm
-
-        client = AsyncOpenAI()
-        messages = [{"role": "user", "content": "Hello!"}]
-
-        response = await client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-        )
-
-        # One line to log - no manual field extraction!
-        await llm.log_openai_response(messages, response)
-    """
+    """Log an OpenAI ChatCompletion response by auto-extracting fields."""
     extracted = _extract_openai_response(response)
-
     return await log_llm_call(
         input_messages=input_messages,
         response_content=extracted["response_content"],
@@ -908,48 +763,15 @@ async def log_openai_response(
 
 
 async def log_anthropic_response(
-    input_messages: Sequence[dict[str, Any]],
+    input_messages: Sequence[_JsonObject],
     response: Any,
     *,
     latency_ms: int | None = None,
     trace_id: str | None = None,
     invocation_id: str | None = None,
 ) -> str:
-    """Log an Anthropic Message response for trace correlation.
-
-    This is a convenience wrapper around log_llm_call() that automatically
-    extracts fields from the Anthropic response object.
-
-    IMPORTANT: You do NOT need this if you use llm.chat() - it logs automatically!
-
-    Args:
-        input_messages: The messages array you sent to Anthropic
-        response: The Message response from Anthropic
-        latency_ms: Time taken in milliseconds (optional)
-        trace_id: Override trace ID (auto-detected from handler context)
-        invocation_id: Override invocation ID (auto-detected from handler context)
-
-    Returns:
-        The llm_call_id assigned to this logged call
-
-    Example:
-        import anthropic
-        from dispatch_agents import llm
-
-        client = anthropic.AsyncAnthropic()
-        messages = [{"role": "user", "content": "Hello!"}]
-
-        response = await client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1024,
-            messages=messages,
-        )
-
-        # One line to log - no manual field extraction!
-        await llm.log_anthropic_response(messages, response)
-    """
+    """Log an Anthropic Message response by auto-extracting fields."""
     extracted = _extract_anthropic_response(response)
-
     return await log_llm_call(
         input_messages=input_messages,
         response_content=extracted["response_content"],
@@ -966,43 +788,17 @@ async def log_anthropic_response(
 
 
 async def log_response(
-    input_messages: Sequence[dict[str, Any]],
+    input_messages: Sequence[_JsonObject],
     response: Any,
     *,
     latency_ms: int | None = None,
     trace_id: str | None = None,
     invocation_id: str | None = None,
 ) -> str:
-    """Log an LLM response for trace correlation (auto-detects provider).
-
-    This function automatically detects whether the response is from OpenAI
-    or Anthropic and extracts the appropriate fields.
-
-    IMPORTANT: You do NOT need this if you use llm.chat() - it logs automatically!
-
-    Args:
-        input_messages: The messages array you sent to the LLM
-        response: The response object from OpenAI or Anthropic
-        latency_ms: Time taken in milliseconds (optional)
-        trace_id: Override trace ID (auto-detected from handler context)
-        invocation_id: Override invocation ID (auto-detected from handler context)
-
-    Returns:
-        The llm_call_id assigned to this logged call
+    """Log an LLM response for trace correlation by auto-detecting provider.
 
     Raises:
-        ValueError: If the response type is not recognized
-
-    Example:
-        from dispatch_agents import llm
-
-        # Works with OpenAI
-        response = await openai_client.chat.completions.create(...)
-        await llm.log_response(messages, response)
-
-        # Works with Anthropic
-        response = await anthropic_client.messages.create(...)
-        await llm.log_response(messages, response)
+        ValueError: If the response type is not recognized.
     """
     if _is_openai_response(response):
         return await log_openai_response(
@@ -1012,7 +808,7 @@ async def log_response(
             trace_id=trace_id,
             invocation_id=invocation_id,
         )
-    elif _is_anthropic_response(response):
+    if _is_anthropic_response(response):
         return await log_anthropic_response(
             input_messages,
             response,
@@ -1020,8 +816,7 @@ async def log_response(
             trace_id=trace_id,
             invocation_id=invocation_id,
         )
-    else:
-        raise ValueError(
-            "Unrecognized response type. Use log_openai_response(), "
-            "log_anthropic_response(), or log_llm_call() with manual fields."
-        )
+    raise ValueError(
+        "Unrecognized response type. Use log_openai_response(), "
+        "log_anthropic_response(), or log_llm_call() with manual fields."
+    )

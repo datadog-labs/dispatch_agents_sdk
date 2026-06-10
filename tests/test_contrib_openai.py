@@ -13,6 +13,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def isolate_runtime_config(monkeypatch):
+    from dispatch_agents.config import _load_runtime_config
+
+    monkeypatch.delenv("DISPATCH_CONFIG_PATH", raising=False)
+    _load_runtime_config.cache_clear()
+    yield
+    _load_runtime_config.cache_clear()
+
+
 @pytest.fixture
 def mock_agents_sdk():
     """Mock the OpenAI Agents SDK modules."""
@@ -75,11 +85,14 @@ def mcp_config_file():
 
 
 @pytest.fixture
-def reset_singleton():
+def reset_singleton(mock_agents_sdk: MagicMock):
     """Reset the singleton state before and after each test."""
     # Import and reset the singleton
+    import importlib
+
     import dispatch_agents.contrib.openai as openai_module
 
+    importlib.reload(openai_module)
     openai_module._mcp_servers = None
     yield
     openai_module._mcp_servers = None
@@ -113,14 +126,20 @@ class TestGetMcpServers:
         assert mock_agents_sdk.call_count == 2
 
         # Check that servers were created with correct params
-        calls = mock_agents_sdk.call_args_list
-        first_call = calls[0]
-        assert first_call.kwargs["name"] in ["test-server", "another-server"]
-        assert "url" in first_call.kwargs["params"]
-        assert first_call.kwargs["cache_tools_list"] is True
-        # Should have tool_meta_resolver set
-        assert "tool_meta_resolver" in first_call.kwargs
-        assert first_call.kwargs["tool_meta_resolver"] is not None
+        calls_by_name = {
+            call.kwargs["name"]: call.kwargs for call in mock_agents_sdk.call_args_list
+        }
+        assert calls_by_name["test-server"]["params"] == {
+            "url": "https://example.com/mcp",
+            "headers": {"Authorization": "Bearer test-token"},
+        }
+        assert calls_by_name["another-server"]["params"] == {
+            "url": "https://other.com/mcp",
+            "headers": {"X-Custom": "value"},
+        }
+        for call_kwargs in calls_by_name.values():
+            assert call_kwargs["cache_tools_list"] is True
+            assert call_kwargs["tool_meta_resolver"] is not None
 
     @pytest.mark.asyncio
     async def test_connects_all_servers(
@@ -151,17 +170,20 @@ class TestGetMcpServers:
         assert mock_agents_sdk.call_count == 2  # Still 2, not 4
 
     @pytest.mark.asyncio
-    async def test_raises_file_not_found_when_no_config(
+    async def test_returns_empty_when_no_config(
         self, mock_agents_sdk: MagicMock, reset_singleton: None
     ) -> None:
-        """Test that FileNotFoundError is raised when config doesn't exist."""
+        """Missing user .mcp.json is valid when no dispatch MCP servers exist."""
         from dispatch_agents.contrib.openai import get_mcp_servers
 
         with patch(
-            "dispatch_agents.mcp.MCP_CONFIG_PATH", "/nonexistent/path/.mcp.json"
+            "dispatch_agents.mcp.MCP_CONFIG_PATH",
+            "/nonexistent/path/.mcp.json",
         ):
-            with pytest.raises(FileNotFoundError):
-                await get_mcp_servers()
+            servers = await get_mcp_servers()
+
+        assert servers == []
+        mock_agents_sdk.assert_not_called()
 
 
 class TestTraceMetaResolver:
@@ -177,7 +199,8 @@ class TestTraceMetaResolver:
         mock_context = MagicMock()
 
         with patch(
-            "dispatch_agents.contrib.openai.get_current_trace_id", return_value=None
+            "dispatch_agents.contrib.openai.get_current_trace_id",
+            return_value=None,
         ):
             with patch(
                 "dispatch_agents.contrib.openai.get_current_invocation_id",
@@ -214,7 +237,8 @@ class TestTraceMetaResolver:
         mock_context = MagicMock()
 
         with patch(
-            "dispatch_agents.contrib.openai.get_current_trace_id", return_value=None
+            "dispatch_agents.contrib.openai.get_current_trace_id",
+            return_value=None,
         ):
             with patch(
                 "dispatch_agents.contrib.openai.get_current_invocation_id",
