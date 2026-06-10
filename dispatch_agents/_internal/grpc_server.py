@@ -25,7 +25,6 @@ from dispatch_agents._internal.dispatch import (
     _dispatch_message,
     _run_init_hook,
 )
-from dispatch_agents._internal.logging_config import get_logger
 from dispatch_agents._internal.models import (
     AgentFunction,
     ErrorPayload,
@@ -46,6 +45,7 @@ from dispatch_agents.handlers import (
     _REGISTERED_HANDLERS,
     _TOPIC_HANDLERS,
 )
+from dispatch_agents.logging import get_logger
 
 logger = get_logger(__name__)
 
