@@ -1,4 +1,4 @@
-"""Tests for dispatch_agents.agent_service module.
+"""Tests for dispatch_agents._internal.agent_service module.
 
 Covers the AgentServiceClient gRPC client without needing a running server.
 """
@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from dispatch_agents.agent_service import AgentServiceClient
+from dispatch_agents._internal.agent_service import AgentServiceClient
 
 
 class TestAgentServiceClientNotInitialized:
@@ -26,8 +26,8 @@ class TestAgentServiceClientNotInitialized:
 
 class TestAgentServiceClientInsecure:
     @pytest.mark.asyncio
-    @patch("dispatch_agents.agent_service.service_pb2_grpc.AgentServiceStub")
-    @patch("dispatch_agents.agent_service.grpc.aio.insecure_channel")
+    @patch("dispatch_agents._internal.agent_service.service_pb2_grpc.AgentServiceStub")
+    @patch("dispatch_agents._internal.agent_service.grpc.aio.insecure_channel")
     async def test_creates_insecure_channel(self, mock_insecure, mock_stub_cls):
         mock_channel = AsyncMock()
         mock_insecure.return_value = mock_channel
@@ -42,9 +42,9 @@ class TestAgentServiceClientInsecure:
 
 class TestAgentServiceClientSecure:
     @pytest.mark.asyncio
-    @patch("dispatch_agents.agent_service.service_pb2_grpc.AgentServiceStub")
-    @patch("dispatch_agents.agent_service.grpc.aio.secure_channel")
-    @patch("dispatch_agents.agent_service.grpc.ssl_channel_credentials")
+    @patch("dispatch_agents._internal.agent_service.service_pb2_grpc.AgentServiceStub")
+    @patch("dispatch_agents._internal.agent_service.grpc.aio.secure_channel")
+    @patch("dispatch_agents._internal.agent_service.grpc.ssl_channel_credentials")
     async def test_default_ssl_credentials(
         self, mock_ssl_creds, mock_secure, mock_stub_cls
     ):
@@ -62,8 +62,8 @@ class TestAgentServiceClientSecure:
         mock_channel.close.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch("dispatch_agents.agent_service.service_pb2_grpc.AgentServiceStub")
-    @patch("dispatch_agents.agent_service.grpc.aio.secure_channel")
+    @patch("dispatch_agents._internal.agent_service.service_pb2_grpc.AgentServiceStub")
+    @patch("dispatch_agents._internal.agent_service.grpc.aio.secure_channel")
     async def test_custom_credentials(self, mock_secure, mock_stub_cls):
         mock_channel = AsyncMock()
         mock_secure.return_value = mock_channel
@@ -80,8 +80,8 @@ class TestAgentServiceClientSecure:
 
 class TestAgentServiceClientDelegation:
     @pytest.mark.asyncio
-    @patch("dispatch_agents.agent_service.service_pb2_grpc.AgentServiceStub")
-    @patch("dispatch_agents.agent_service.grpc.aio.insecure_channel")
+    @patch("dispatch_agents._internal.agent_service.service_pb2_grpc.AgentServiceStub")
+    @patch("dispatch_agents._internal.agent_service.grpc.aio.insecure_channel")
     async def test_invoke_delegates_to_stub(self, mock_insecure, mock_stub_cls):
         mock_channel = AsyncMock()
         mock_insecure.return_value = mock_channel
@@ -101,8 +101,8 @@ class TestAgentServiceClientDelegation:
         assert result is mock_response
 
     @pytest.mark.asyncio
-    @patch("dispatch_agents.agent_service.service_pb2_grpc.AgentServiceStub")
-    @patch("dispatch_agents.agent_service.grpc.aio.insecure_channel")
+    @patch("dispatch_agents._internal.agent_service.service_pb2_grpc.AgentServiceStub")
+    @patch("dispatch_agents._internal.agent_service.grpc.aio.insecure_channel")
     async def test_health_check_delegates_to_stub(self, mock_insecure, mock_stub_cls):
         mock_channel = AsyncMock()
         mock_insecure.return_value = mock_channel
@@ -122,8 +122,8 @@ class TestAgentServiceClientDelegation:
         assert result is mock_response
 
     @pytest.mark.asyncio
-    @patch("dispatch_agents.agent_service.service_pb2_grpc.AgentServiceStub")
-    @patch("dispatch_agents.agent_service.grpc.aio.insecure_channel")
+    @patch("dispatch_agents._internal.agent_service.service_pb2_grpc.AgentServiceStub")
+    @patch("dispatch_agents._internal.agent_service.grpc.aio.insecure_channel")
     async def test_invoke_without_timeout(self, mock_insecure, mock_stub_cls):
         mock_channel = AsyncMock()
         mock_insecure.return_value = mock_channel

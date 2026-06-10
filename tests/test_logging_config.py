@@ -1,17 +1,17 @@
-"""Tests for dispatch_agents.logging_config module."""
+"""Tests for dispatch_agents._internal.logging_config module."""
 
 import logging
 
 
 class TestParseBoolEnv:
     def test_truthy_values(self):
-        from dispatch_agents.logging_config import _parse_bool_env
+        from dispatch_agents._internal.logging_config import _parse_bool_env
 
         for val in ("1", "true", "yes", "on", "True", "YES", "ON"):
             assert _parse_bool_env(val) is True, f"Expected True for {val!r}"
 
     def test_falsy_values(self):
-        from dispatch_agents.logging_config import _parse_bool_env
+        from dispatch_agents._internal.logging_config import _parse_bool_env
 
         assert _parse_bool_env(None) is False
         assert _parse_bool_env("0") is False
@@ -26,7 +26,7 @@ class TestGetLogLevel:
         monkeypatch.delenv("DISPATCH_LOG_LEVEL", raising=False)
         monkeypatch.delenv("DISPATCH_VERBOSE", raising=False)
 
-        from dispatch_agents.logging_config import _get_log_level
+        from dispatch_agents._internal.logging_config import _get_log_level
 
         assert _get_log_level() == logging.WARNING
 
@@ -34,21 +34,21 @@ class TestGetLogLevel:
         monkeypatch.setenv("DISPATCH_LOG_LEVEL", "DEBUG")
         monkeypatch.delenv("DISPATCH_VERBOSE", raising=False)
 
-        from dispatch_agents.logging_config import _get_log_level
+        from dispatch_agents._internal.logging_config import _get_log_level
 
         assert _get_log_level() == logging.DEBUG
 
     def test_explicit_info(self, monkeypatch):
         monkeypatch.setenv("DISPATCH_LOG_LEVEL", "INFO")
 
-        from dispatch_agents.logging_config import _get_log_level
+        from dispatch_agents._internal.logging_config import _get_log_level
 
         assert _get_log_level() == logging.INFO
 
     def test_explicit_error(self, monkeypatch):
         monkeypatch.setenv("DISPATCH_LOG_LEVEL", "ERROR")
 
-        from dispatch_agents.logging_config import _get_log_level
+        from dispatch_agents._internal.logging_config import _get_log_level
 
         assert _get_log_level() == logging.ERROR
 
@@ -56,7 +56,7 @@ class TestGetLogLevel:
         monkeypatch.delenv("DISPATCH_LOG_LEVEL", raising=False)
         monkeypatch.setenv("DISPATCH_VERBOSE", "1")
 
-        from dispatch_agents.logging_config import _get_log_level
+        from dispatch_agents._internal.logging_config import _get_log_level
 
         assert _get_log_level() == logging.DEBUG
 
@@ -64,7 +64,7 @@ class TestGetLogLevel:
         monkeypatch.setenv("DISPATCH_LOG_LEVEL", "ERROR")
         monkeypatch.setenv("DISPATCH_VERBOSE", "1")
 
-        from dispatch_agents.logging_config import _get_log_level
+        from dispatch_agents._internal.logging_config import _get_log_level
 
         assert _get_log_level() == logging.ERROR
 
@@ -74,7 +74,7 @@ class TestConfigureLogging:
         monkeypatch.setenv("DISPATCH_LOG_LEVEL", "INFO")
         monkeypatch.delenv("DISPATCH_VERBOSE", raising=False)
 
-        import dispatch_agents.logging_config as lc
+        import dispatch_agents._internal.logging_config as lc
 
         lc._logging_configured = False
         lc.configure_logging(force=True)
@@ -86,7 +86,7 @@ class TestConfigureLogging:
         monkeypatch.delenv("DISPATCH_LOG_LEVEL", raising=False)
         monkeypatch.delenv("DISPATCH_VERBOSE", raising=False)
 
-        import dispatch_agents.logging_config as lc
+        import dispatch_agents._internal.logging_config as lc
 
         lc._logging_configured = False
 
@@ -103,19 +103,19 @@ class TestConfigureLogging:
 
 class TestGetLogger:
     def test_child_logger(self):
-        from dispatch_agents.logging_config import SDK_LOGGER_NAME, get_logger
+        from dispatch_agents._internal.logging_config import SDK_LOGGER_NAME, get_logger
 
         logger = get_logger("grpc_server")
         assert logger.name == f"{SDK_LOGGER_NAME}.grpc_server"
 
     def test_root_logger(self):
-        from dispatch_agents.logging_config import SDK_LOGGER_NAME, get_logger
+        from dispatch_agents._internal.logging_config import SDK_LOGGER_NAME, get_logger
 
         logger = get_logger()
         assert logger.name == SDK_LOGGER_NAME
 
     def test_fully_qualified_name_passthrough(self):
-        from dispatch_agents.logging_config import SDK_LOGGER_NAME, get_logger
+        from dispatch_agents._internal.logging_config import SDK_LOGGER_NAME, get_logger
 
         fqn = f"{SDK_LOGGER_NAME}.some_module"
         logger = get_logger(fqn)
@@ -127,14 +127,14 @@ class TestIsVerbose:
         monkeypatch.delenv("DISPATCH_LOG_LEVEL", raising=False)
         monkeypatch.delenv("DISPATCH_VERBOSE", raising=False)
 
-        from dispatch_agents.logging_config import is_verbose
+        from dispatch_agents._internal.logging_config import is_verbose
 
         assert is_verbose() is False
 
     def test_true_when_debug(self, monkeypatch):
         monkeypatch.setenv("DISPATCH_LOG_LEVEL", "DEBUG")
 
-        from dispatch_agents.logging_config import is_verbose
+        from dispatch_agents._internal.logging_config import is_verbose
 
         assert is_verbose() is True
 
@@ -142,6 +142,6 @@ class TestIsVerbose:
         monkeypatch.delenv("DISPATCH_LOG_LEVEL", raising=False)
         monkeypatch.setenv("DISPATCH_VERBOSE", "1")
 
-        from dispatch_agents.logging_config import is_verbose
+        from dispatch_agents._internal.logging_config import is_verbose
 
         assert is_verbose() is True

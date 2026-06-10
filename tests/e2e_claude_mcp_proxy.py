@@ -247,7 +247,7 @@ async def test_claude_mcp_proxy():
         from unittest.mock import patch
 
         # Patch the config path and reload
-        with patch("dispatch_agents.mcp.MCP_CONFIG_PATH", config_path):
+        with patch("dispatch_agents.mcp._MCP_CONFIG_PATH", config_path):
             import dispatch_agents.contrib.claude as claude_module
             import dispatch_agents.mcp as mcp_module
 

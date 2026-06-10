@@ -1,2 +1,1 @@
-## Bug Fixes
-- Custom `base_image` configurations are now explicitly rejected with an error rather than silently ignored, providing clearer feedback when unsupported options are supplied.
+- BUG FIX: fix crash cause by write only file system when users provide .mcp.json - Improved user error handling - Local dev router improvements - reorganize SDK with intentional public interfaces

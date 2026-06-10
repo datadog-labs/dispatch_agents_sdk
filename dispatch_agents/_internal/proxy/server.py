@@ -6,9 +6,9 @@ The backend handles all format conversion, credentials, LLM routing,
 cost tracking, and telemetry.
 
 When the backend has no LLM provider configured, the proxy falls back to
-calling the provider directly using the developer's original API key (saved
-in _DISPATCH_ORIGINAL_* env vars by grpc_listener.py). Successful fallback
-calls are logged to /llm/log for observability.
+calling the provider directly using the developer's original API key (passed
+as ``FallbackKeys`` to ``run_server()`` by grpc_listener.py). Successful
+fallback calls are logged to /llm/log for observability.
 
 Unsupported endpoints (embeddings, models list, audio, images, etc.) are
 forwarded via the backend's /llm/passthrough endpoint for credential injection
@@ -25,20 +25,43 @@ import json
 import logging
 import os
 import time
-from typing import Any
+from typing import Any, TypedDict
+from urllib.parse import parse_qs
 
 import httpcore
 import httpx
+import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from dispatch_agents.proxy.sse_utils import (
+from dispatch_agents._internal.proxy.sse_utils import (
     StreamingUsageCollector,
 )
+from dispatch_agents._internal.transport import (
+    build_api_base_url as _build_api_base_url,
+)
+from dispatch_agents.config import config as _config
 
 logger = logging.getLogger(__name__)
+
+
+class FallbackKeys(TypedDict, total=False):
+    """Original provider API keys captured before the proxy overwrites them.
+
+    Passed to ``run_server()`` by grpc_listener.py and stored on ``app.state``.
+    Used as fallback credentials when the backend has no LLM provider configured.
+    """
+
+    OPENAI_API_KEY: str
+    ANTHROPIC_API_KEY: str
+
+
+def _get_fallback_keys(request: Request) -> FallbackKeys:
+    """Return the fallback keys stored on app.state (typed accessor)."""
+    return request.app.state.fallback_keys  # type: ignore[no-any-return]
+
 
 # Cache: trace_id → True means "backend has no LLM config, use fallback".
 # Within one invocation (same trace_id), only the first call checks the backend.
@@ -50,14 +73,12 @@ _fallback_traces: set[str] = set()
 _PROVIDER_CONFIG: dict[str, dict[str, Any]] = {
     "openai": {
         "base_url": "https://api.openai.com",
-        "key_env": "_DISPATCH_ORIGINAL_OPENAI_API_KEY",
         "key_name": "OPENAI_API_KEY",
         "auth_header": "Authorization",
         "auth_prefix": "Bearer ",
     },
     "anthropic": {
         "base_url": "https://api.anthropic.com",
-        "key_env": "_DISPATCH_ORIGINAL_ANTHROPIC_API_KEY",
         "key_name": "ANTHROPIC_API_KEY",
         "auth_header": "x-api-key",
         "auth_prefix": "",
@@ -78,25 +99,29 @@ OPENAI_RESPONSES_ROUTE = "/openai/v1/responses"
 ANTHROPIC_MESSAGES_ROUTE = "/anthropic/v1/messages"
 
 
+def _get_backend_api_base() -> str:
+    """Get the backend API base URL for the LLM proxy.
+
+    Local dev talks to the non-namespaced router; deployed agents use the
+    namespace-scoped backend endpoints (defaulting to ``dev`` if unset).
+    """
+    router_url = os.environ.get("DISPATCH_BACKEND_URL", "http://dispatch.api:8000")
+    return _build_api_base_url(router_url, namespace=_config.namespace or "dev")
+
+
 def _get_backend_proxy_url() -> str:
     """Get the backend LLM proxy URL."""
-    router_url = os.environ.get("BACKEND_URL", "http://dispatch.api:8000")
-    namespace = os.environ.get("DISPATCH_NAMESPACE", "dev")
-    return f"{router_url}/api/unstable/namespace/{namespace}/llm/proxy"
+    return f"{_get_backend_api_base()}/llm/proxy"
 
 
 def _get_backend_passthrough_url() -> str:
     """Get the backend LLM passthrough URL."""
-    router_url = os.environ.get("BACKEND_URL", "http://dispatch.api:8000")
-    namespace = os.environ.get("DISPATCH_NAMESPACE", "dev")
-    return f"{router_url}/api/unstable/namespace/{namespace}/llm/passthrough"
+    return f"{_get_backend_api_base()}/llm/passthrough"
 
 
 def _get_backend_log_url() -> str:
     """Get the backend LLM log URL for observability."""
-    router_url = os.environ.get("BACKEND_URL", "http://dispatch.api:8000")
-    namespace = os.environ.get("DISPATCH_NAMESPACE", "dev")
-    return f"{router_url}/api/unstable/namespace/{namespace}/llm/log"
+    return f"{_get_backend_api_base()}/llm/log"
 
 
 def _get_auth_headers() -> dict[str, str]:
@@ -115,10 +140,12 @@ def _is_not_configured_error(status_code: int, body: bytes) -> bool:
     where the sidecar should fall back to the agent's own API key.
     Does NOT match other 400 errors (budget exceeded, invalid request, etc.).
 
-    The backend /llm/proxy endpoint returns errors in SDK format:
-      OpenAI:    {"error": {"message": "No LLM providers configured..."}}
-      Anthropic: {"type": "error", "error": {"message": "No LLM providers configured..."}}
-    Other backend endpoints use: {"detail": "..."}
+    The backend /llm/proxy endpoint returns errors in SDK format::
+
+        OpenAI:    {"error": {"message": "No LLM providers configured..."}}
+        Anthropic: {"type": "error", "error": {"message": "No LLM providers configured..."}}
+
+    Other backend endpoints use ``{"detail": "..."}``.
     """
     if status_code != 400:
         return False
@@ -243,8 +270,9 @@ async def _call_provider_directly(
     provider_format: str,
     extra_headers: dict[str, str] | None = None,
     endpoint: str | None = None,
+    fallback_keys: FallbackKeys | None = None,
 ) -> Response:
-    """Call the LLM provider directly using saved original API keys.
+    """Call the LLM provider directly using the agent's original API keys.
 
     Used for supported endpoints (chat/messages) when backend has no config.
     Returns a 401 with actionable instructions if no original key exists.
@@ -256,7 +284,7 @@ async def _call_provider_directly(
             status_code=500,
         )
 
-    api_key = os.environ.get(config["key_env"])
+    api_key = (fallback_keys or {}).get(config["key_name"])
     if not api_key:
         # Scenario C: no provider configured AND no developer key
         msg = (
@@ -330,6 +358,7 @@ async def _call_provider_passthrough(
     body: bytes | None,
     query_string: str,
     extra_headers: dict[str, str] | None = None,
+    fallback_keys: FallbackKeys | None = None,
 ) -> Response:
     """Call the provider directly for passthrough (unsupported) endpoints.
 
@@ -343,7 +372,7 @@ async def _call_provider_passthrough(
             status_code=500,
         )
 
-    api_key = os.environ.get(config["key_env"])
+    api_key = (fallback_keys or {}).get(config["key_name"])
     if not api_key:
         msg = (
             f"No LLM provider configured in Dispatch and no {config['key_name']} found. "
@@ -446,7 +475,7 @@ async def _log_fallback_call(
     if invocation_id:
         payload["invocation_id"] = invocation_id
 
-    agent_name = os.environ.get("DISPATCH_AGENT_NAME")
+    agent_name = _config.agent_name
     if agent_name:
         payload["agent_name"] = agent_name
 
@@ -486,6 +515,8 @@ async def _proxy_to_backend(
     )
     is_streaming = body.get("stream", False)
 
+    fallback_keys = _get_fallback_keys(request)
+
     # Check fallback cache — skip backend if we already know it's not configured
     if trace_id and trace_id in _fallback_traces:
         if is_streaming:
@@ -496,10 +527,11 @@ async def _proxy_to_backend(
                 endpoint,
                 trace_id,
                 invocation_id,
+                fallback_keys=fallback_keys,
             )
         start = time.monotonic()
         fallback_resp = await _call_provider_directly(
-            body, provider_format, extra_headers, endpoint
+            body, provider_format, extra_headers, endpoint, fallback_keys=fallback_keys
         )
         elapsed_ms = int((time.monotonic() - start) * 1000)
         if fallback_resp.status_code < 400:
@@ -532,7 +564,7 @@ async def _proxy_to_backend(
         backend_payload["extra_headers"] = extra_headers
 
     # Inject agent identity
-    agent_name = os.environ.get("DISPATCH_AGENT_NAME")
+    agent_name = _config.agent_name
     if agent_name:
         backend_payload["agent_name"] = agent_name
 
@@ -542,6 +574,7 @@ async def _proxy_to_backend(
             backend_payload,
             provider_format,
             trace_id,
+            fallback_keys=fallback_keys,
         )
 
     # Non-streaming path — forward to backend and return response
@@ -590,7 +623,7 @@ async def _proxy_to_backend(
             _fallback_traces.add(trace_id)
         start = time.monotonic()
         fallback_resp = await _call_provider_directly(
-            body, provider_format, extra_headers, endpoint
+            body, provider_format, extra_headers, endpoint, fallback_keys=fallback_keys
         )
         elapsed_ms = int((time.monotonic() - start) * 1000)
 
@@ -611,7 +644,7 @@ async def _proxy_to_backend(
     # Detect provider auth error — fall back to agent's own key if available
     if _is_auth_error(resp.status_code):
         config = _PROVIDER_CONFIG.get(provider_format)
-        has_own_key = config and os.environ.get(config["key_env"])
+        has_own_key = config and (fallback_keys or {}).get(config["key_name"])
         if has_own_key:
             logger.warning(
                 "Provider auth failed (HTTP %d), falling back to agent's own %s key",
@@ -622,7 +655,11 @@ async def _proxy_to_backend(
                 _fallback_traces.add(trace_id)
             start = time.monotonic()
             fallback_resp = await _call_provider_directly(
-                body, provider_format, extra_headers, endpoint
+                body,
+                provider_format,
+                extra_headers,
+                endpoint,
+                fallback_keys=fallback_keys,
             )
             elapsed_ms = int((time.monotonic() - start) * 1000)
             if fallback_resp.status_code < 400:
@@ -663,6 +700,7 @@ async def _proxy_to_backend_streaming(
     backend_payload: dict[str, Any],
     provider_format: str,
     trace_id: str | None,
+    fallback_keys: FallbackKeys | None = None,
 ) -> Response:
     """Stream SSE from the backend to the SDK caller.
 
@@ -702,7 +740,9 @@ async def _proxy_to_backend_streaming(
                         # Provider key rejected — cache trace so next call
                         # goes direct via _call_provider_directly_streaming
                         config = _PROVIDER_CONFIG.get(provider_format)
-                        has_fallback = config and os.environ.get(config["key_env"])
+                        has_fallback = config and (fallback_keys or {}).get(
+                            config["key_name"]
+                        )
                         if has_fallback and trace_id:
                             _fallback_traces.add(trace_id)
                         logger.warning(
@@ -761,6 +801,7 @@ async def _call_provider_directly_streaming(
     endpoint: str | None = None,
     trace_id: str | None = None,
     invocation_id: str | None = None,
+    fallback_keys: FallbackKeys | None = None,
 ) -> Response:
     """Call the LLM provider directly with streaming (fallback when backend has no config).
 
@@ -775,7 +816,7 @@ async def _call_provider_directly_streaming(
             status_code=500,
         )
 
-    api_key = os.environ.get(config["key_env"])
+    api_key = (fallback_keys or {}).get(config["key_name"])
     if not api_key:
         msg = (
             f"No LLM provider configured in Dispatch and no {config['key_name']} found. "
@@ -797,10 +838,7 @@ async def _call_provider_directly_streaming(
         )
 
     headers: dict[str, str] = {"Content-Type": "application/json"}
-    if provider_format == "anthropic":
-        headers["x-api-key"] = api_key
-    else:
-        headers["Authorization"] = f"Bearer {api_key}"
+    headers[config["auth_header"]] = f"{config['auth_prefix']}{api_key}"
     if extra_headers:
         headers.update(extra_headers)
 
@@ -893,7 +931,7 @@ async def _log_fallback_streaming_call(
             payload["trace_id"] = trace_id
         if invocation_id:
             payload["invocation_id"] = invocation_id
-        agent_name = os.environ.get("DISPATCH_AGENT_NAME")
+        agent_name = _config.agent_name
         if agent_name:
             payload["agent_name"] = agent_name
 
@@ -935,6 +973,8 @@ async def _proxy_passthrough(request: Request, provider_format: str) -> Response
         request
     )
 
+    fallback_keys = _get_fallback_keys(request)
+
     # Check fallback cache
     if trace_id and trace_id in _fallback_traces:
         return await _call_provider_passthrough(
@@ -944,6 +984,7 @@ async def _proxy_passthrough(request: Request, provider_format: str) -> Response
             raw_body if raw_body else None,
             query_string,
             extra_headers=extra_headers,
+            fallback_keys=fallback_keys,
         )
 
     # Build passthrough request for backend.
@@ -956,8 +997,6 @@ async def _proxy_passthrough(request: Request, provider_format: str) -> Response
         backend_payload["body"] = body_dict
     if query_string:
         # Parse query string into dict for the backend
-        from urllib.parse import parse_qs
-
         qs = parse_qs(query_string, keep_blank_values=True)
         backend_payload["query_params"] = {k: v[0] for k, v in qs.items()}
     if trace_id:
@@ -969,7 +1008,7 @@ async def _proxy_passthrough(request: Request, provider_format: str) -> Response
     if extra_headers:
         backend_payload["extra_headers"] = extra_headers
 
-    agent_name = os.environ.get("DISPATCH_AGENT_NAME")
+    agent_name = _config.agent_name
     if agent_name:
         backend_payload["agent_name"] = agent_name
 
@@ -996,6 +1035,7 @@ async def _proxy_passthrough(request: Request, provider_format: str) -> Response
             raw_body if raw_body else None,
             query_string,
             extra_headers=extra_headers,
+            fallback_keys=fallback_keys,
         )
 
     # Detect "not configured" and fall back to direct provider call
@@ -1013,12 +1053,13 @@ async def _proxy_passthrough(request: Request, provider_format: str) -> Response
             raw_body if raw_body else None,
             query_string,
             extra_headers=extra_headers,
+            fallback_keys=fallback_keys,
         )
 
     # Detect provider auth error — fall back to agent's own key if available
     if _is_auth_error(resp.status_code):
         config = _PROVIDER_CONFIG.get(provider_format)
-        if config and os.environ.get(config["key_env"]):
+        if config and (fallback_keys or {}).get(config["key_name"]):
             logger.warning(
                 "Provider auth failed (HTTP %d), falling back to agent's own %s key for passthrough",
                 resp.status_code,
@@ -1033,6 +1074,7 @@ async def _proxy_passthrough(request: Request, provider_format: str) -> Response
                 raw_body if raw_body else None,
                 query_string,
                 extra_headers=extra_headers,
+                fallback_keys=fallback_keys,
             )
         logger.warning(
             "Provider auth failed (HTTP %d) and no fallback %s key for passthrough",
@@ -1090,10 +1132,13 @@ async def anthropic_passthrough(request: Request) -> Response:
     return await _proxy_passthrough(request, "anthropic")
 
 
-def create_app() -> Starlette:
+def create_app(fallback_keys: FallbackKeys | None = None) -> Starlette:
     """Create the sidecar proxy Starlette application.
 
     Routes are ordered so specific endpoints match before catch-all.
+    ``fallback_keys`` are the agent's original provider API keys, captured
+    before the proxy overwrites them. Stored on ``app.state`` and used as
+    fallback credentials when the backend has no LLM provider configured.
     """
     routes = [
         Route("/health", health, methods=["GET"]),
@@ -1116,6 +1161,7 @@ def create_app() -> Starlette:
         ),
     ]
     app = Starlette(routes=routes)
+    app.state.fallback_keys = fallback_keys or FallbackKeys()
     logger.info(
         "LLM sidecar proxy configured → %s",
         _get_backend_proxy_url(),
@@ -1123,11 +1169,9 @@ def create_app() -> Starlette:
     return app
 
 
-def run_server(port: int = 8780, **_: Any) -> None:
-    """Run the sidecar proxy server (blocking). Called from subprocess."""
-    import uvicorn
-
-    app = create_app()
+def run_server(port: int = 8780, fallback_keys: FallbackKeys | None = None) -> None:
+    """Run the sidecar proxy server (blocking). Called from grpc_listener.py."""
+    app = create_app(fallback_keys=fallback_keys)
     uvicorn.run(
         app,
         host="127.0.0.1",

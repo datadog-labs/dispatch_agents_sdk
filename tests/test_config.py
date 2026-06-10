@@ -3,7 +3,14 @@
 import pytest
 import yaml
 
-from dispatch_agents.config import (
+from dispatch_agents._internal.config_validation import (
+    _format_cpu,
+    _format_memory,
+    _get_valid_cpu_values,
+    _get_valid_memory_for_cpu,
+)
+from dispatch_agents.config import _load_runtime_config, config
+from dispatch_agents.models import (
     DispatchConfig,
     DomainSelector,
     EgressConfig,
@@ -14,12 +21,6 @@ from dispatch_agents.config import (
     SecretConfig,
     VolumeConfig,
     VolumeMode,
-    _format_cpu,
-    _format_memory,
-    _get_valid_cpu_values,
-    _get_valid_memory_for_cpu,
-    _load_runtime_config,
-    _runtime,
 )
 
 
@@ -410,6 +411,13 @@ class TestDispatchConfig:
         assert config.agent_name is None
         assert config.resources.limits.cpu == "250m"
         assert config.resources.limits.memory == "2Gi"
+        assert config.llm_instrument is True
+
+    def test_llm_instrument_serialization(self):
+        """llm_instrument is serialized only when opted out of the default."""
+        assert "llm_instrument" not in DispatchConfig().to_yaml_dict()
+        opted_out = DispatchConfig(llm_instrument=False).to_yaml_dict()
+        assert opted_out["llm_instrument"] is False
 
     def test_full_config(self):
         """Should accept all config options."""
@@ -440,6 +448,12 @@ class TestDispatchConfig:
         assert config.secrets is not None and len(config.secrets) == 1
         assert config.volumes is not None and len(config.volumes) == 1
         assert config.mcp_servers is not None and len(config.mcp_servers) == 1
+
+    def test_mcp_config_json_is_user_allowed_env(self):
+        """MCP_CONFIG_JSON is no longer platform-consumed runtime config."""
+        config = DispatchConfig(env={"MCP_CONFIG_JSON": "{}"})
+
+        assert config.env == {"MCP_CONFIG_JSON": "{}"}
 
 
 class TestDispatchConfigToYamlDict:
@@ -504,6 +518,43 @@ class TestDispatchConfigToYamlDict:
         assert "system_packages" not in result
         assert "secrets" not in result
         assert "volumes" not in result
+
+
+class TestReservedEnv:
+    """Tests for the DISPATCH_-prefix reserved env validation."""
+
+    def test_plain_env_allowed(self):
+        """Non-prefixed user env vars are accepted."""
+        config = DispatchConfig(env={"MY_VAR": "x", "API_BASE": "https://example"})
+        assert config.env == {"MY_VAR": "x", "API_BASE": "https://example"}
+
+    def test_dispatch_prefixed_var_rejected(self):
+        """Any DISPATCH_-prefixed key is reserved by the platform."""
+        with pytest.raises(ValueError) as exc_info:
+            DispatchConfig(env={"DISPATCH_BACKEND_URL": "http://evil"})
+        assert "DISPATCH_BACKEND_URL" in str(exc_info.value)
+        assert "reserved" in str(exc_info.value)
+
+    def test_arbitrary_dispatch_prefixed_var_rejected(self):
+        """The rule is prefix-based, not a fixed list — new names are covered."""
+        with pytest.raises(ValueError):
+            DispatchConfig(env={"DISPATCH_SOMETHING_NEW": "x"})
+
+    @pytest.mark.parametrize("key", ["DISPATCH_LOG_LEVEL", "DISPATCH_VERBOSE"])
+    def test_user_overridable_toggles_allowed(self, key: str):
+        """The explicit allowlist of behavioral toggles is accepted."""
+        config = DispatchConfig(env={key: "DEBUG"})
+        assert config.env == {key: "DEBUG"}
+
+    def test_reports_all_reserved_collisions(self):
+        """The error lists every offending key, sorted."""
+        with pytest.raises(ValueError) as exc_info:
+            DispatchConfig(
+                env={"DISPATCH_NAMESPACE": "x", "DISPATCH_API_KEY": "y", "OK": "z"}
+            )
+        message = str(exc_info.value)
+        assert "DISPATCH_API_KEY" in message
+        assert "DISPATCH_NAMESPACE" in message
 
 
 class TestVolumeMode:
@@ -793,7 +844,15 @@ class TestDispatchConfigVars:
             }
         )
         assert config.vars is not None
-        assert config.vars["payload_fields"]["value"][0]["name"] == "query"
+        # ``vars`` is a JsonObject; narrow each level of the recursive JsonValue
+        # union to reach the nested name.
+        payload_fields = config.vars["payload_fields"]
+        assert isinstance(payload_fields, dict)
+        value = payload_fields["value"]
+        assert isinstance(value, list)
+        first_field = value[0]
+        assert isinstance(first_field, dict)
+        assert first_field["name"] == "query"
 
     def test_vars_described_value_only(self):
         """Should accept {value} without description."""
@@ -852,7 +911,7 @@ class TestDispatchConfigVars:
 
 
 class TestRuntimeConfig:
-    """Tests for the _RuntimeConfig singleton."""
+    """Tests for the public runtime config singleton."""
 
     def test_reads_vars_from_file(self, tmp_path, monkeypatch):
         """Should read vars from dispatch.yaml via DISPATCH_CONFIG_PATH."""
@@ -869,10 +928,10 @@ class TestRuntimeConfig:
         monkeypatch.setenv("DISPATCH_CONFIG_PATH", str(config_file))
         _load_runtime_config.cache_clear()
 
-        assert _runtime.namespace == "test-ns"
-        assert _runtime.agent_name == "test-agent"
-        assert _runtime.vars["temperature"] == 0.7
-        assert _runtime.vars["debug"] is True
+        assert config.namespace == "test-ns"
+        assert config.agent_name == "test-agent"
+        assert config.vars["temperature"] == 0.7
+        assert config.vars["debug"] is True
 
         _load_runtime_config.cache_clear()
 
@@ -883,7 +942,7 @@ class TestRuntimeConfig:
         monkeypatch.setenv("DISPATCH_CONFIG_PATH", str(config_file))
         _load_runtime_config.cache_clear()
 
-        assert _runtime.vars == {}
+        assert config.vars == {}
 
         _load_runtime_config.cache_clear()
 
@@ -896,8 +955,8 @@ class TestRuntimeConfig:
         monkeypatch.setenv("DISPATCH_AGENT_NAME", "env-agent")
         _load_runtime_config.cache_clear()
 
-        assert _runtime.namespace == "env-ns"
-        assert _runtime.agent_name == "env-agent"
+        assert config.namespace == "env-ns"
+        assert config.agent_name == "env-agent"
 
         _load_runtime_config.cache_clear()
 
@@ -906,8 +965,8 @@ class TestRuntimeConfig:
         monkeypatch.setenv("DISPATCH_CONFIG_PATH", str(tmp_path / "nonexistent.yaml"))
         _load_runtime_config.cache_clear()
 
-        assert _runtime.namespace is None
-        assert _runtime.vars == {}
+        assert config.namespace is None
+        assert config.vars == {}
 
         _load_runtime_config.cache_clear()
 
@@ -928,9 +987,9 @@ class TestRuntimeConfig:
         monkeypatch.setenv("DISPATCH_CONFIG_PATH", str(config_file))
         _load_runtime_config.cache_clear()
 
-        assert _runtime.vars["temperature"] == 0.7
-        assert _runtime.vars["debug"] is True
-        assert _runtime.vars["name"] == "test"
+        assert config.vars["temperature"] == 0.7
+        assert config.vars["debug"] is True
+        assert config.vars["name"] == "test"
 
         _load_runtime_config.cache_clear()
 
@@ -951,9 +1010,31 @@ class TestRuntimeConfig:
         monkeypatch.setenv("DISPATCH_CONFIG_PATH", str(config_file))
         _load_runtime_config.cache_clear()
 
-        descs = _runtime.vars_descriptions
+        descs = config.vars_descriptions
         assert descs["temperature"] == "Sampling temp"
         assert descs["name"] == "Agent name"
         assert "debug" not in descs
+
+    def test_llm_instrument_defaults_true(self, tmp_path, monkeypatch):
+        """llm_instrument defaults to True when not set in dispatch.yaml."""
+        config_file = tmp_path / "dispatch.yaml"
+        config_file.write_text(yaml.dump({"namespace": "test"}))
+        monkeypatch.setenv("DISPATCH_CONFIG_PATH", str(config_file))
+        _load_runtime_config.cache_clear()
+
+        assert config.llm_instrument is True
+
+        _load_runtime_config.cache_clear()
+
+    def test_llm_instrument_false_from_file(self, tmp_path, monkeypatch):
+        """llm_instrument reads False from the dispatch.yaml field."""
+        config_file = tmp_path / "dispatch.yaml"
+        config_file.write_text(yaml.dump({"llm_instrument": False}))
+        monkeypatch.setenv("DISPATCH_CONFIG_PATH", str(config_file))
+        _load_runtime_config.cache_clear()
+
+        assert config.llm_instrument is False
+
+        _load_runtime_config.cache_clear()
 
         _load_runtime_config.cache_clear()

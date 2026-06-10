@@ -16,6 +16,10 @@ Example:
     structured_llm = llm.with_structured_output(MySchema)
 """
 
+import asyncio
+import concurrent.futures
+import inspect
+import json
 from collections.abc import Sequence
 from typing import Any
 
@@ -34,7 +38,8 @@ from langchain_core.messages import (
 from langchain_core.outputs import ChatGeneration, ChatResult
 from pydantic import Field
 
-from .llm import LLMClient, LLMResponse
+from dispatch_agents.llm import LLMClient
+from dispatch_agents.models import LLMMessage, LLMResponse
 
 
 def _get_tool_schema(tool: Any) -> dict[str, Any]:
@@ -86,8 +91,6 @@ def _convert_tools_to_openai_format(tools: Sequence[Any]) -> list[dict[str, Any]
             formatted_tools.append(tool)
         elif callable(tool):
             # Function with docstring
-            import inspect
-
             sig = inspect.signature(tool)
             formatted_tools.append(
                 {
@@ -113,8 +116,6 @@ def _serialize_tool_arguments(args: Any) -> str:
     OpenAI-compatible APIs expect tool call arguments as a JSON string,
     not a Python dict string representation.
     """
-    import json
-
     if isinstance(args, str):
         return args
     if isinstance(args, dict):
@@ -170,8 +171,6 @@ def _parse_tool_arguments(arguments: Any) -> dict[str, Any]:
     OpenAI returns arguments as a JSON string, but LangChain expects a dict.
     Handles various input formats gracefully.
     """
-    import json
-
     if isinstance(arguments, dict):
         return arguments
     if isinstance(arguments, str):
@@ -291,8 +290,6 @@ class ChatDispatch(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         """Synchronous generation - wraps async implementation."""
-        import asyncio
-
         # Get or create event loop
         try:
             loop = asyncio.get_running_loop()
@@ -301,8 +298,6 @@ class ChatDispatch(BaseChatModel):
 
         if loop and loop.is_running():
             # We're in an async context, need to run in a new thread
-            import concurrent.futures
-
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(
                     asyncio.run,
@@ -326,8 +321,10 @@ class ChatDispatch(BaseChatModel):
         if self._client is None:
             self._client = LLMClient()
 
-        # Convert messages to API format
-        message_dicts = [_convert_message_to_dict(m) for m in messages]
+        # Convert messages to typed LLMMessage models for the gateway.
+        llm_messages = [
+            LLMMessage.model_validate(_convert_message_to_dict(m)) for m in messages
+        ]
 
         # Extract tools from kwargs if provided (for function calling)
         tools = kwargs.get("tools")
@@ -338,7 +335,7 @@ class ChatDispatch(BaseChatModel):
 
         # Call the LLM Gateway
         response = await self._client.inference(
-            messages=message_dicts,
+            messages=llm_messages,
             model=self.model,
             provider=self.provider,
             tools=tools,
