@@ -18,6 +18,13 @@ import logging
 import os
 import sys
 
+__all__ = [
+    "SDK_LOGGER_NAME",
+    "configure_logging",
+    "get_logger",
+    "is_verbose",
+]
+
 # SDK logger namespace
 SDK_LOGGER_NAME = "dispatch_agents"
 
@@ -119,7 +126,7 @@ def get_logger(name: str | None = None) -> logging.Logger:
     configure_logging()
 
     if name:
-        # Create child logger: dispatch_agents._internal.grpc_server, etc.
+        # Create child logger: dispatch_agents.grpc_server, etc.
         if name.startswith(SDK_LOGGER_NAME):
             return logging.getLogger(name)
         return logging.getLogger(f"{SDK_LOGGER_NAME}.{name}")
