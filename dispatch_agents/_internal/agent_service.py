@@ -10,10 +10,6 @@ from agentservice.v1 import (
     service_pb2_grpc,
 )
 
-__all__ = [
-    "AgentServiceClient",
-]
-
 
 class AgentServiceClient:
     """Async gRPC client for the AgentService.

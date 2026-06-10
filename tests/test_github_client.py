@@ -8,10 +8,12 @@ from unittest.mock import patch
 import httpx
 import pytest
 
+from dispatch_agents.models import GitHubAppToken
+
 
 def _set_sdk_env(monkeypatch) -> None:
     monkeypatch.setenv("DISPATCH_API_KEY", "dak_test_key")
-    monkeypatch.setenv("BACKEND_URL", "http://test-backend:8000")
+    monkeypatch.setenv("DISPATCH_BACKEND_URL", "http://test-backend:8000")
 
 
 def _install_mock_transport(monkeypatch, handler) -> None:
@@ -61,10 +63,7 @@ async def test_returns_token_and_calls_backend(monkeypatch):
 
     _install_mock_transport(monkeypatch, responder)
 
-    from dispatch_agents.integrations.github.client import (
-        GitHubAppToken,
-        get_github_app_token,
-    )
+    from dispatch_agents.integrations.github.client import get_github_app_token
 
     result = await get_github_app_token()
 
@@ -81,6 +80,23 @@ async def test_returns_token_and_calls_backend(monkeypatch):
     assert request.headers["authorization"] == "Bearer dak_test_key"
     assert request.headers["x-dispatch-client"] == "sdk"
     assert request.headers["x-dispatch-client-version"]
+
+
+async def test_package_level_helper_delegates(monkeypatch):
+    import dispatch_agents.integrations.github as github
+    from dispatch_agents.integrations.github import GitHubAppToken
+
+    expected = GitHubAppToken(
+        token="ghs_public_path",
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+
+    async def fake_get_github_app_token():
+        return expected
+
+    monkeypatch.setattr(github, "_get_github_app_token", fake_get_github_app_token)
+
+    assert await github.get_github_app_token() is expected
 
 
 async def test_reuses_cached_token_within_single_run(monkeypatch):
@@ -111,7 +127,7 @@ async def test_reuses_cached_token_at_refresh_boundary(monkeypatch):
     fixed_now = datetime(2026, 3, 30, 12, 0, tzinfo=UTC)
     boundary_expiry = fixed_now + timedelta(minutes=m._TOKEN_BUFFER_MINUTES)
     m._cached_token = (
-        m.GitHubAppToken(token="ghs_boundary", expires_at=boundary_expiry),
+        GitHubAppToken(token="ghs_boundary", expires_at=boundary_expiry),
         boundary_expiry,
     )
     call_count = 0
@@ -142,7 +158,7 @@ async def test_refreshes_near_expiry_token(monkeypatch):
     fixed_now = datetime(2026, 3, 30, 12, 0, tzinfo=UTC)
     near_expiry = fixed_now + timedelta(minutes=m._TOKEN_BUFFER_MINUTES, seconds=-1)
     m._cached_token = (
-        m.GitHubAppToken(token="ghs_old", expires_at=near_expiry),
+        GitHubAppToken(token="ghs_old", expires_at=near_expiry),
         near_expiry,
     )
     call_count = 0
@@ -173,12 +189,12 @@ async def test_missing_api_key_does_not_return_cached_token(monkeypatch):
 
     cached_expiry = datetime.now(UTC) + timedelta(hours=1)
     m._cached_token = (
-        m.GitHubAppToken(token="ghs_cached", expires_at=cached_expiry),
+        GitHubAppToken(token="ghs_cached", expires_at=cached_expiry),
         cached_expiry,
     )
 
     monkeypatch.delenv("DISPATCH_API_KEY", raising=False)
-    monkeypatch.setenv("BACKEND_URL", "http://test-backend:8000")
+    monkeypatch.setenv("DISPATCH_BACKEND_URL", "http://test-backend:8000")
     call_count = 0
 
     def responder(request: httpx.Request) -> httpx.Response:

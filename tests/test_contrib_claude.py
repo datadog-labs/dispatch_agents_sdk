@@ -13,6 +13,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def isolate_runtime_config(monkeypatch):
+    from dispatch_agents.config import _load_runtime_config
+
+    monkeypatch.delenv("DISPATCH_CONFIG_PATH", raising=False)
+    _load_runtime_config.cache_clear()
+    yield
+    _load_runtime_config.cache_clear()
+
+
 @pytest.fixture
 def mock_claude_sdk():
     """Mock the Claude Agent SDK modules."""
@@ -214,17 +224,54 @@ class TestGetMcpServers:
         assert servers1 is servers2
 
     @pytest.mark.asyncio
-    async def test_raises_file_not_found_when_no_config(
-        self, mock_claude_sdk: MagicMock, reset_singleton: MagicMock
+    async def test_passes_configured_url_and_headers_to_proxy_server(
+        self,
+        mcp_config_file: str,
+        reset_singleton: MagicMock,
     ) -> None:
-        """Test that FileNotFoundError is raised when config doesn't exist."""
+        """Test that merged config is forwarded intact to SDK proxy servers."""
         from dispatch_agents.contrib.claude import get_mcp_servers
 
         with patch(
-            "dispatch_agents.mcp.MCP_CONFIG_PATH", "/nonexistent/path/.mcp.json"
+            "dispatch_agents.contrib.claude._create_proxy_server",
+            new_callable=AsyncMock,
+        ) as create_proxy_server:
+            create_proxy_server.side_effect = [
+                {"type": "sdk", "name": "test-server"},
+                {"type": "sdk", "name": "another-server"},
+            ]
+
+            servers = await get_mcp_servers()
+
+        assert set(servers) == {"test-server", "another-server"}
+        calls_by_name = {
+            call.args[0]: call.args for call in create_proxy_server.call_args_list
+        }
+        assert calls_by_name["test-server"] == (
+            "test-server",
+            "https://example.com/mcp",
+            {"Authorization": "Bearer test-token"},
+        )
+        assert calls_by_name["another-server"] == (
+            "another-server",
+            "https://other.com/mcp",
+            {"X-Custom": "value"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_no_config(
+        self, mock_claude_sdk: MagicMock, reset_singleton: MagicMock
+    ) -> None:
+        """Missing user .mcp.json is valid when no dispatch MCP servers exist."""
+        from dispatch_agents.contrib.claude import get_mcp_servers
+
+        with patch(
+            "dispatch_agents.mcp.MCP_CONFIG_PATH",
+            "/nonexistent/path/.mcp.json",
         ):
-            with pytest.raises(FileNotFoundError):
-                await get_mcp_servers()
+            servers = await get_mcp_servers()
+
+        assert servers == {}
 
     @pytest.mark.asyncio
     async def test_handles_upstream_server_unavailable(
@@ -256,24 +303,28 @@ class TestProxyToolTraceContext:
         reset_singleton: MagicMock,
     ) -> None:
         """Test that proxy tools use get_mcp_client for trace context injection."""
-        from mcp.types import CallToolResult, TextContent, Tool
+        from mcp.types import Tool
 
         from dispatch_agents.contrib.claude import _create_proxy_tool
+        from dispatch_agents.models import MCPToolCallResult
 
         # Track call_tool invocations
         captured_tool_name: str | None = None
         captured_args: dict[str, Any] | None = None
 
-        # Create a mock MCP client
+        # Create a mock MCP client. get_mcp_client().call_tool() returns the public
+        # MCPToolCallResult (dict content), not a raw CallToolResult. Construct it via
+        # the ``isError`` alias: without the pydantic mypy plugin, only the alias is
+        # accepted statically even though ``populate_by_name`` allows the field name.
         class MockMcpClient:
             async def call_tool(
                 self, name: str, arguments: dict[str, Any] | None = None
-            ) -> CallToolResult:
+            ) -> MCPToolCallResult:
                 nonlocal captured_tool_name, captured_args
                 captured_tool_name = name
                 captured_args = arguments
-                return CallToolResult(
-                    content=[TextContent(type="text", text="mock result")],
+                return MCPToolCallResult(
+                    content=[{"type": "text", "text": "mock result"}],
                     isError=False,
                 )
 

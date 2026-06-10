@@ -3,8 +3,9 @@ import json
 import httpx
 import pytest
 
-from dispatch_agents import BasePayload, dispatch_message, memory, on
-from dispatch_agents.models import SuccessPayload, TopicMessage
+from dispatch_agents import BasePayload, memory, on
+from dispatch_agents._internal.dispatch import _dispatch_message as dispatch_message
+from dispatch_agents._internal.models import SuccessPayload, TopicMessage
 
 
 class GithubEventPayload(BasePayload):
@@ -90,7 +91,7 @@ async def test_memory_long_term(monkeypatch):
         kwargs["transport"] = transport
         return original_client(*args, **kwargs)
 
-    monkeypatch.setenv("BACKEND_URL", "http://mock")
+    monkeypatch.setenv("DISPATCH_BACKEND_URL", "http://mock")
     monkeypatch.setenv("DISPATCH_NAMESPACE", "test-namespace")
     monkeypatch.setattr(httpx, "AsyncClient", async_client_factory)
 
@@ -140,7 +141,7 @@ async def test_memory_short_term(monkeypatch):
         kwargs["transport"] = transport
         return original_client(*args, **kwargs)
 
-    monkeypatch.setenv("BACKEND_URL", "http://mock")
+    monkeypatch.setenv("DISPATCH_BACKEND_URL", "http://mock")
     monkeypatch.setenv("DISPATCH_NAMESPACE", "test-namespace")
     monkeypatch.setattr(httpx, "AsyncClient", async_client_factory)
 

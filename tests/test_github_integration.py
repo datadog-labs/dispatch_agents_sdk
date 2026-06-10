@@ -3,14 +3,15 @@
 import pytest
 from pydantic import ValidationError
 
-from dispatch_agents import (
-    HANDLER_METADATA,
-    REGISTERED_HANDLERS,
-    TOPIC_HANDLERS,
-    dispatch_message,
-    on,
+from dispatch_agents import on
+from dispatch_agents._internal.dispatch import _dispatch_message as dispatch_message
+from dispatch_agents._internal.models import SuccessPayload, TopicMessage
+from dispatch_agents.handlers import _HANDLER_METADATA as HANDLER_METADATA
+from dispatch_agents.handlers import (
+    _REGISTERED_HANDLERS as REGISTERED_HANDLERS,
 )
-from dispatch_agents.integrations.github import (
+from dispatch_agents.handlers import _TOPIC_HANDLERS as TOPIC_HANDLERS
+from dispatch_agents.integrations.github.events import (
     GitHubBranch,
     GitHubChangeValue,
     GitHubComment,
@@ -25,7 +26,6 @@ from dispatch_agents.integrations.github import (
     PullRequestReviewRequestRemoved,
     Push,
 )
-from dispatch_agents.models import SuccessPayload, TopicMessage
 
 
 @pytest.fixture(autouse=True)
@@ -303,7 +303,7 @@ def test_github_repository_rejects_missing_pushed_at():
 
 def test_github_commit_user_accepts_null_email():
     """GitHubCommitUser accepts null email while keeping the field required."""
-    from dispatch_agents.integrations.github import GitHubCommitUser
+    from dispatch_agents.integrations.github.events import GitHubCommitUser
 
     user = GitHubCommitUser.model_validate({"name": "octocat", "email": None})
     assert user.email is None
@@ -311,7 +311,7 @@ def test_github_commit_user_accepts_null_email():
 
 def test_github_commit_user_rejects_missing_email():
     """GitHubCommitUser still requires the email key even when null is allowed."""
-    from dispatch_agents.integrations.github import GitHubCommitUser
+    from dispatch_agents.integrations.github.events import GitHubCommitUser
 
     with pytest.raises(ValidationError) as exc_info:
         GitHubCommitUser.model_validate({"name": "octocat"})
@@ -577,7 +577,7 @@ def test_pr_payload_invalid_field_type():
 )
 def test_dispatch_topic(event_class_name: str, expected_topic: str):
     """Each event class returns the correct dispatch topic string."""
-    import dispatch_agents.integrations.github as gh
+    import dispatch_agents.integrations.github.events as gh
 
     event_class = getattr(gh, event_class_name)
     assert event_class.dispatch_topic() == expected_topic
@@ -590,7 +590,7 @@ def test_dispatch_topic(event_class_name: str, expected_topic: str):
 
 def test_on_github_class_single_event():
     """@on(github_event=...) with a single event class registers handler and metadata."""
-    from dispatch_agents.integrations.github import PullRequestOpened
+    from dispatch_agents.integrations.github.events import PullRequestOpened
 
     @on(github_event=PullRequestOpened)
     async def handle_pr_class(payload: PullRequestOpened) -> None:
@@ -605,7 +605,7 @@ def test_on_github_class_single_event():
 
 def test_on_github_class_multiple_events():
     """@on(github_event=...) with multiple event classes registers all topics."""
-    from dispatch_agents.integrations.github import (
+    from dispatch_agents.integrations.github.events import (
         PullRequestBase,
         PullRequestOpened,
         PullRequestSynchronize,
@@ -627,7 +627,7 @@ def test_on_github_class_multiple_events():
 
 def test_on_github_class_validation_success_base_class():
     """@on accepts a base class as payload type for multiple PR event subclasses."""
-    from dispatch_agents.integrations.github import (
+    from dispatch_agents.integrations.github.events import (
         PullRequestBase,
         PullRequestClosed,
         PullRequestOpened,
@@ -642,7 +642,7 @@ def test_on_github_class_validation_success_base_class():
 
 def test_on_github_class_validation_failure():
     """@on raises TypeError when the payload type is incompatible with the event."""
-    from dispatch_agents.integrations.github import IssueBase, PullRequestOpened
+    from dispatch_agents.integrations.github.events import IssueBase, PullRequestOpened
 
     with pytest.raises(TypeError, match="is not compatible with"):
 
@@ -668,7 +668,7 @@ def test_on_github_class_invalid_type():
 @pytest.mark.asyncio
 async def test_on_github_class_dispatch_pr_opened():
     """Dispatching a PR opened event reaches the registered class-based handler."""
-    from dispatch_agents.integrations.github import PullRequestOpened
+    from dispatch_agents.integrations.github.events import PullRequestOpened
 
     received_payload = None
 
@@ -703,7 +703,7 @@ async def test_on_github_class_dispatch_pr_opened():
 @pytest.mark.asyncio
 async def test_on_github_class_dispatch_push():
     """Dispatching a push event reaches the registered Push handler."""
-    from dispatch_agents.integrations.github import Push
+    from dispatch_agents.integrations.github.events import Push
 
     @on(github_event=Push)
     async def handle_push_dispatch(payload: Push) -> dict:
@@ -753,7 +753,9 @@ def test_pull_request_review_comment_validation_error_malformed_user():
     Reproduces an issue where generated payloads have user objects with only
     a 'description' field instead of required 'id' and 'login' fields.
     """
-    from dispatch_agents.integrations.github import PullRequestReviewCommentCreated
+    from dispatch_agents.integrations.github.events import (
+        PullRequestReviewCommentCreated,
+    )
 
     malformed_payload = {
         "sender": {
@@ -879,7 +881,7 @@ def test_pydantic_required_fields_match_octokit_spec():
         return set(definitions[spec_key].get("required", []))
 
     # Get all event payload classes from our module
-    from dispatch_agents.integrations.github import GitHubEventPayload
+    from dispatch_agents.integrations.github.events import GitHubEventPayload
 
     event_classes = []
     for name in dir(github_module):

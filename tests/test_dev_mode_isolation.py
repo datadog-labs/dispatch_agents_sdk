@@ -11,8 +11,35 @@ import tempfile
 from pathlib import Path
 from unittest import mock
 
+_SDK_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _subprocess_env(
+    dev_data_dir: Path | None = None,
+    *,
+    extra: dict[str, str] | None = None,
+    include_dev_data_dir: bool = True,
+) -> dict[str, str]:
+    """Return an environment where subprocesses can import the local SDK."""
+    env = dict(os.environ)
+    existing_pythonpath = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = (
+        str(_SDK_ROOT)
+        if not existing_pythonpath
+        else os.pathsep.join([str(_SDK_ROOT), existing_pythonpath])
+    )
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    if include_dev_data_dir and dev_data_dir is not None:
+        env["DISPATCH_DEV_DATA_DIR"] = str(dev_data_dir)
+    elif not include_dev_data_dir:
+        env.pop("DISPATCH_DEV_DATA_DIR", None)
+    if extra:
+        env.update(extra)
+    return env
+
+
 # ============================================================================
-# Test: get_data_dir() function
+# Test: storage path resolution
 # ============================================================================
 
 
@@ -27,7 +54,7 @@ class TestGetDataDir:
             os.environ.pop("DISPATCH_DEV_DATA_DIR", None)
 
             # Re-import to get fresh function behavior
-            from dispatch_agents import get_data_dir
+            from dispatch_agents.storage import get_data_dir
 
             result = get_data_dir()
             assert result == Path("/data")
@@ -41,7 +68,7 @@ class TestGetDataDir:
             with mock.patch.dict(
                 os.environ, {"DISPATCH_DEV_DATA_DIR": str(dev_data_dir)}
             ):
-                from dispatch_agents import get_data_dir
+                from dispatch_agents.storage import get_data_dir
 
                 result = get_data_dir()
                 expected = dev_data_dir / "data"
@@ -69,8 +96,8 @@ class TestInitAllowedPrefixes:
             with mock.patch.dict(
                 os.environ, {"DISPATCH_DEV_DATA_DIR": str(dev_data_dir)}
             ):
-                # Import the internal function
-                from dispatch_agents import _init_allowed_prefixes, get_data_dir
+                from dispatch_agents._internal.dev import _init_allowed_prefixes
+                from dispatch_agents.storage import get_data_dir
 
                 prefixes = _init_allowed_prefixes()
                 # Resolve the path to match how prefixes are stored
@@ -86,7 +113,7 @@ class TestInitAllowedPrefixes:
             with mock.patch.dict(
                 os.environ, {"DISPATCH_DEV_DATA_DIR": str(dev_data_dir)}
             ):
-                from dispatch_agents import _init_allowed_prefixes
+                from dispatch_agents._internal.dev import _init_allowed_prefixes
 
                 prefixes = _init_allowed_prefixes()
                 # All paths are resolved to canonical form (handles macOS symlinks)
@@ -109,7 +136,7 @@ class TestInitAllowedPrefixes:
             with mock.patch.dict(
                 os.environ, {"DISPATCH_DEV_DATA_DIR": str(dev_data_dir)}
             ):
-                from dispatch_agents import _init_allowed_prefixes
+                from dispatch_agents._internal.dev import _init_allowed_prefixes
 
                 prefixes = _init_allowed_prefixes()
                 # Agent folder should be allowed (parent.parent of dev-data)
@@ -124,7 +151,7 @@ class TestInitAllowedPrefixes:
 
 def test_disallowed_write_error_exported():
     """DisallowedWriteError is exported from dispatch_agents."""
-    from dispatch_agents import DisallowedWriteError
+    from dispatch_agents.storage import DisallowedWriteError
 
     assert DisallowedWriteError is not None
     assert issubclass(DisallowedWriteError, Exception)
@@ -161,7 +188,7 @@ import sys
 from pathlib import Path
 
 # This import installs the audit hook
-from dispatch_agents import DisallowedWriteError
+from dispatch_agents.storage import DisallowedWriteError
 
 # Try to write to home directory
 home_file = Path.home() / ".test-dispatch-isolation-file"
@@ -178,11 +205,7 @@ except Exception as e:
 """
             result = subprocess.run(
                 [sys.executable, "-c", test_script],
-                env={
-                    **os.environ,
-                    "DISPATCH_DEV_DATA_DIR": str(dev_data_dir),
-                    "PYTHONDONTWRITEBYTECODE": "1",
-                },
+                env=_subprocess_env(dev_data_dir),
                 capture_output=True,
                 text=True,
             )
@@ -204,7 +227,7 @@ except Exception as e:
 import sys
 from pathlib import Path
 
-from dispatch_agents import DisallowedWriteError
+from dispatch_agents.storage import DisallowedWriteError
 
 home_file = Path.home() / ".test-dispatch-repeated-file"
 
@@ -242,11 +265,7 @@ sys.exit(0)
 """
             result = subprocess.run(
                 [sys.executable, "-c", test_script],
-                env={
-                    **os.environ,
-                    "DISPATCH_DEV_DATA_DIR": str(dev_data_dir),
-                    "PYTHONDONTWRITEBYTECODE": "1",
-                },
+                env=_subprocess_env(dev_data_dir),
                 capture_output=True,
                 text=True,
             )
@@ -265,7 +284,7 @@ sys.exit(0)
 
             test_script = """
 import sys
-from dispatch_agents import get_data_dir
+from dispatch_agents.storage import get_data_dir
 
 # Write to data directory
 data_dir = get_data_dir()
@@ -286,11 +305,7 @@ except Exception as e:
 """
             result = subprocess.run(
                 [sys.executable, "-c", test_script],
-                env={
-                    **os.environ,
-                    "DISPATCH_DEV_DATA_DIR": str(dev_data_dir),
-                    "PYTHONDONTWRITEBYTECODE": "1",
-                },
+                env=_subprocess_env(dev_data_dir),
                 capture_output=True,
                 text=True,
             )
@@ -331,11 +346,7 @@ else:
 """
             result = subprocess.run(
                 [sys.executable, "-c", test_script],
-                env={
-                    **os.environ,
-                    "DISPATCH_DEV_DATA_DIR": str(dev_data_dir),
-                    "PYTHONDONTWRITEBYTECODE": "1",
-                },
+                env=_subprocess_env(dev_data_dir),
                 capture_output=True,
                 text=True,
             )
@@ -376,11 +387,7 @@ except Exception as e:
 """
             result = subprocess.run(
                 [sys.executable, "-c", test_script],
-                env={
-                    **os.environ,
-                    "DISPATCH_DEV_DATA_DIR": str(dev_data_dir),
-                    "PYTHONDONTWRITEBYTECODE": "1",
-                },
+                env=_subprocess_env(dev_data_dir),
                 capture_output=True,
                 text=True,
             )
@@ -425,11 +432,10 @@ except Exception as e:
 """
             result = subprocess.run(
                 [sys.executable, "-c", test_script],
-                env={
-                    **os.environ,
-                    "DISPATCH_DEV_DATA_DIR": str(dev_data_dir),
-                    "DISPATCH_ALLOW_ARBITRARY_WRITES": "1",
-                },
+                env=_subprocess_env(
+                    dev_data_dir,
+                    extra={"DISPATCH_ALLOW_ARBITRARY_WRITES": "1"},
+                ),
                 capture_output=True,
                 text=True,
             )
@@ -451,6 +457,7 @@ from pathlib import Path
 
 # Import - hook should NOT be installed (no DISPATCH_DEV_DATA_DIR)
 import dispatch_agents
+from dispatch_agents.storage import DisallowedWriteError
 
 # Write anywhere
 test_file = Path("{test_file}")
@@ -463,7 +470,7 @@ try:
     else:
         print("ERROR: Content mismatch")
         sys.exit(1)
-except dispatch_agents.DisallowedWriteError as e:
+except DisallowedWriteError as e:
     print(f"ERROR: Hook should not be installed: {{e}}")
     sys.exit(2)
 except Exception as e:
@@ -471,10 +478,9 @@ except Exception as e:
     sys.exit(3)
 """
             # Run without DISPATCH_DEV_DATA_DIR
-            env = {k: v for k, v in os.environ.items() if k != "DISPATCH_DEV_DATA_DIR"}
             result = subprocess.run(
                 [sys.executable, "-c", test_script],
-                env=env,
+                env=_subprocess_env(include_dev_data_dir=False),
                 capture_output=True,
                 text=True,
             )
@@ -528,11 +534,7 @@ except Exception as e:
 """
             result = subprocess.run(
                 [sys.executable, "-c", test_script],
-                env={
-                    **os.environ,
-                    "DISPATCH_DEV_DATA_DIR": str(dev_data_dir),
-                    "PYTHONDONTWRITEBYTECODE": "1",
-                },
+                env=_subprocess_env(dev_data_dir),
                 capture_output=True,
                 text=True,
             )

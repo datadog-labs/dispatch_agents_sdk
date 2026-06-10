@@ -12,10 +12,11 @@ import httpx
 import pytest
 from starlette.testclient import TestClient
 
-from dispatch_agents.proxy.server import (
+from dispatch_agents._internal.proxy.server import (
     ANTHROPIC_MESSAGES_ROUTE,
     OPENAI_CHAT_ROUTE,
     OPENAI_RESPONSES_ROUTE,
+    FallbackKeys,
     _call_provider_directly,
     _call_provider_passthrough,
     _fallback_traces,
@@ -28,11 +29,26 @@ from dispatch_agents.proxy.server import (
     _log_fallback_call,
     create_app,
 )
+from dispatch_agents.config import _load_runtime_config
 
 
 @pytest.fixture
 def client():
     return TestClient(create_app())
+
+
+@pytest.fixture
+def client_with_openai_fallback():
+    return TestClient(
+        create_app(fallback_keys=FallbackKeys(OPENAI_API_KEY="sk-test-key-123"))
+    )
+
+
+@pytest.fixture
+def client_with_anthropic_fallback():
+    return TestClient(
+        create_app(fallback_keys=FallbackKeys(ANTHROPIC_API_KEY="sk-ant-test-key-123"))
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -155,7 +171,7 @@ def _make_sequential_mock_client(responses: list[tuple[dict, int]]):
 
 
 class TestOpenAIPassthrough:
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     def test_wraps_body_with_metadata(self, mock_client_cls, client):
         """Raw OpenAI body is wrapped with endpoint and metadata (no provider_format)."""
         mock_client_cls.return_value = _make_mock_client()
@@ -177,7 +193,7 @@ class TestOpenAIPassthrough:
         assert payload["body"]["messages"] == [{"role": "user", "content": "Hello"}]
         assert payload["body"]["temperature"] == 0.7
 
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     def test_injects_trace_context(self, mock_client_cls, client):
         """X-Dispatch-* headers become trace_id/invocation_id in wrapper."""
         mock_client_cls.return_value = _make_mock_client()
@@ -197,10 +213,13 @@ class TestOpenAIPassthrough:
         assert payload["invocation_id"] == "inv-xyz"
 
     @patch.dict(os.environ, {"DISPATCH_AGENT_NAME": "my-agent"})
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     def test_injects_agent_name(self, mock_client_cls, client):
         """DISPATCH_AGENT_NAME env var is included in wrapper."""
         mock_client_cls.return_value = _make_mock_client()
+        # The runtime config is cached for the process lifetime; clear it so the
+        # patched env is re-read (simulating a fresh process with this env set).
+        _load_runtime_config.cache_clear()
 
         resp = client.post(
             OPENAI_CHAT_ROUTE,
@@ -211,7 +230,7 @@ class TestOpenAIPassthrough:
         payload = mock_client_cls.return_value.post.call_args.kwargs["json"]
         assert payload["agent_name"] == "my-agent"
 
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     def test_returns_backend_response_as_is(self, mock_client_cls, client):
         """Backend response is returned directly without transformation."""
         mock_client_cls.return_value = _make_mock_client(MOCK_OPENAI_RESPONSE)
@@ -227,7 +246,7 @@ class TestOpenAIPassthrough:
         data = resp.json()
         assert data == MOCK_OPENAI_RESPONSE
 
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     def test_connection_error_returns_openai_format_502(self, mock_client_cls, client):
         """Connection failure returns OpenAI-format error."""
         mock_client_cls.return_value = _make_mock_client(connect_error=True)
@@ -241,7 +260,7 @@ class TestOpenAIPassthrough:
         assert "error" in resp.json()
         assert "connection_error" in resp.json()["error"]["type"]
 
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     def test_timeout_error_returns_openai_format_502(self, mock_client_cls, client):
         """Timeout failures should also map to OpenAI-format 502."""
         mock_client_cls.return_value = _make_mock_client(
@@ -259,7 +278,7 @@ class TestOpenAIPassthrough:
 
 
 class TestAnthropicPassthrough:
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     def test_wraps_body_with_anthropic_format(self, mock_client_cls, client):
         """Raw Anthropic body is wrapped with endpoint (no provider_format)."""
         mock_client_cls.return_value = _make_mock_client(MOCK_ANTHROPIC_RESPONSE)
@@ -283,7 +302,7 @@ class TestAnthropicPassthrough:
         assert payload["body"]["messages"] == [{"role": "user", "content": "Hello"}]
         assert payload["body"]["max_tokens"] == 1024
 
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     def test_returns_backend_response_as_is(self, mock_client_cls, client):
         """Backend Anthropic-format response returned directly."""
         mock_client_cls.return_value = _make_mock_client(MOCK_ANTHROPIC_RESPONSE)
@@ -300,7 +319,7 @@ class TestAnthropicPassthrough:
         data = resp.json()
         assert data == MOCK_ANTHROPIC_RESPONSE
 
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     def test_connection_error_returns_anthropic_format_502(
         self, mock_client_cls, client
     ):
@@ -320,7 +339,7 @@ class TestAnthropicPassthrough:
         assert resp.json()["type"] == "error"
         assert "api_error" in resp.json()["error"]["type"]
 
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     def test_timeout_error_returns_anthropic_format_502(self, mock_client_cls, client):
         """Timeout failures should also map to Anthropic-format 502."""
         mock_client_cls.return_value = _make_mock_client(
@@ -410,11 +429,16 @@ class TestIsNotConfiguredError:
 class TestFallbackBehavior:
     """Tests for the proxy fallback when backend has no LLM provider configured."""
 
-    @patch("dispatch_agents.proxy.server._log_fallback_call", new_callable=AsyncMock)
-    @patch.dict(os.environ, {"_DISPATCH_ORIGINAL_OPENAI_API_KEY": "sk-test-key-123"})
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
-    def test_fallback_with_original_openai_key(self, mock_client_cls, mock_log, client):
+    @patch(
+        "dispatch_agents._internal.proxy.server._log_fallback_call",
+        new_callable=AsyncMock,
+    )
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
+    def test_fallback_with_original_openai_key(
+        self, mock_client_cls, mock_log, client_with_openai_fallback
+    ):
         """Backend returns 400 'not configured', fallback uses original key."""
+        client = client_with_openai_fallback
         # First call: backend returns "not configured"
         # Second call: direct provider returns success
         mock_client_cls.return_value = _make_sequential_mock_client(
@@ -444,18 +468,13 @@ class TestFallbackBehavior:
         second_call_headers = calls[1].kwargs.get("headers", {})
         assert second_call_headers.get("Authorization") == "Bearer sk-test-key-123"
 
-    @patch("dispatch_agents.proxy.server._log_fallback_call", new_callable=AsyncMock)
-    @patch.dict(
-        os.environ,
-        {"_DISPATCH_ORIGINAL_OPENAI_API_KEY": ""},
-        clear=False,
+    @patch(
+        "dispatch_agents._internal.proxy.server._log_fallback_call",
+        new_callable=AsyncMock,
     )
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     def test_no_key_returns_401(self, mock_client_cls, mock_log, client):
         """Backend returns 400, no original key → 401 with actionable message."""
-        # Remove the original key (empty string isn't truthy)
-        os.environ.pop("_DISPATCH_ORIGINAL_OPENAI_API_KEY", None)
-
         mock_client_cls.return_value = _make_mock_client(NOT_CONFIGURED_RESPONSE, 400)
 
         resp = client.post(
@@ -468,8 +487,11 @@ class TestFallbackBehavior:
         assert "OPENAI_API_KEY" in error["message"]
         assert "dispatch llm setup" in error["message"]
 
-    @patch("dispatch_agents.proxy.server._log_fallback_call", new_callable=AsyncMock)
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch(
+        "dispatch_agents._internal.proxy.server._log_fallback_call",
+        new_callable=AsyncMock,
+    )
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     def test_no_fallback_on_other_errors(self, mock_client_cls, mock_log, client):
         """Backend returns 400 for a different reason → no fallback, error returned."""
         budget_error = {"detail": "Budget exceeded for this agent"}
@@ -486,10 +508,12 @@ class TestFallbackBehavior:
         # Only one call (to backend), no second call to provider
         assert mock_client_cls.return_value.post.call_count == 1
 
-    @patch.dict(os.environ, {"_DISPATCH_ORIGINAL_OPENAI_API_KEY": "sk-test-key-123"})
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
-    def test_fallback_logs_to_llm_log(self, mock_client_cls, client):
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
+    def test_fallback_logs_to_llm_log(
+        self, mock_client_cls, client_with_openai_fallback
+    ):
         """Successful fallback triggers fire-and-forget /llm/log POST."""
+        client = client_with_openai_fallback
         # We need 3 calls: backend (400), provider (200), log (200)
         mock_client_cls.return_value = _make_sequential_mock_client(
             [
@@ -522,15 +546,16 @@ class TestFallbackBehavior:
             assert log_payload.get("provider") == "openai"
             assert log_payload.get("trace_id") == "trace-log-test"
 
-    @patch("dispatch_agents.proxy.server._log_fallback_call", new_callable=AsyncMock)
-    @patch.dict(
-        os.environ, {"_DISPATCH_ORIGINAL_ANTHROPIC_API_KEY": "sk-ant-test-key-123"}
+    @patch(
+        "dispatch_agents._internal.proxy.server._log_fallback_call",
+        new_callable=AsyncMock,
     )
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     def test_anthropic_fallback_uses_x_api_key_header(
-        self, mock_client_cls, mock_log, client
+        self, mock_client_cls, mock_log, client_with_anthropic_fallback
     ):
         """Anthropic fallback uses x-api-key header (not Authorization: Bearer)."""
+        client = client_with_anthropic_fallback
         mock_client_cls.return_value = _make_sequential_mock_client(
             [
                 (NOT_CONFIGURED_RESPONSE, 400),
@@ -565,13 +590,16 @@ class TestFallbackBehavior:
         # Should NOT have Authorization header for Anthropic
         assert "Authorization" not in second_call_headers
 
-    @patch("dispatch_agents.proxy.server._log_fallback_call", new_callable=AsyncMock)
-    @patch.dict(os.environ, {"_DISPATCH_ORIGINAL_OPENAI_API_KEY": "sk-test-key-123"})
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch(
+        "dispatch_agents._internal.proxy.server._log_fallback_call",
+        new_callable=AsyncMock,
+    )
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     def test_fallback_cache_skips_backend_on_second_call(
-        self, mock_client_cls, mock_log, client
+        self, mock_client_cls, mock_log, client_with_openai_fallback
     ):
         """Second call with same trace_id skips backend, goes direct to provider."""
+        client = client_with_openai_fallback
         # First request: backend 400, then provider 200
         mock_client_cls.return_value = _make_sequential_mock_client(
             [
@@ -613,13 +641,15 @@ class TestFallbackBehavior:
         )
         assert "api.openai.com" in str(third_url)
 
-    @patch("dispatch_agents.proxy.server._log_fallback_call", new_callable=AsyncMock)
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch(
+        "dispatch_agents._internal.proxy.server._log_fallback_call",
+        new_callable=AsyncMock,
+    )
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     def test_anthropic_no_key_returns_401_anthropic_format(
         self, mock_client_cls, mock_log, client
     ):
         """Anthropic fallback with no key returns Anthropic-format 401 error."""
-        os.environ.pop("_DISPATCH_ORIGINAL_ANTHROPIC_API_KEY", None)
         mock_client_cls.return_value = _make_mock_client(NOT_CONFIGURED_RESPONSE, 400)
 
         resp = client.post(
@@ -658,7 +688,7 @@ MOCK_RESPONSES_API_RESPONSE = {
 
 
 class TestResponsesAPIEndpoint:
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     def test_sends_responses_endpoint(self, mock_client_cls, client):
         """Responses API route sends endpoint='/v1/responses' in backend payload."""
         mock_client_cls.return_value = _make_mock_client(MOCK_RESPONSES_API_RESPONSE)
@@ -677,7 +707,7 @@ class TestResponsesAPIEndpoint:
         assert payload["endpoint"] == "/v1/responses"
         assert payload["body"]["input"] == "Tell me a joke"
 
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     def test_responses_connection_error_returns_502(self, mock_client_cls, client):
         """Connection failure on Responses API returns OpenAI-format 502."""
         mock_client_cls.return_value = _make_mock_client(connect_error=True)
@@ -697,10 +727,10 @@ class TestResponsesAPIEndpoint:
 
 class TestGetBackendProxyUrl:
     def test_default_values(self, monkeypatch):
-        monkeypatch.delenv("BACKEND_URL", raising=False)
+        monkeypatch.delenv("DISPATCH_BACKEND_URL", raising=False)
         monkeypatch.delenv("DISPATCH_NAMESPACE", raising=False)
 
-        from dispatch_agents.proxy.server import _get_backend_proxy_url
+        from dispatch_agents._internal.proxy.server import _get_backend_proxy_url
 
         url = _get_backend_proxy_url()
         assert "dispatch.api:8000" in url
@@ -709,22 +739,43 @@ class TestGetBackendProxyUrl:
 
     @patch.dict(
         os.environ,
-        {"BACKEND_URL": "http://custom:9000", "DISPATCH_NAMESPACE": "my-ns"},
+        {"DISPATCH_BACKEND_URL": "http://custom:9000", "DISPATCH_NAMESPACE": "my-ns"},
     )
     def test_custom_values(self):
-        from dispatch_agents.proxy.server import _get_backend_proxy_url
+        from dispatch_agents._internal.proxy.server import _get_backend_proxy_url
 
         url = _get_backend_proxy_url()
         assert url == "http://custom:9000/api/unstable/namespace/my-ns/llm/proxy"
 
+    @patch.dict(
+        os.environ,
+        {
+            "DISPATCH_BACKEND_URL": "http://localhost:4000",
+            "DISPATCH_NAMESPACE": "examples",
+            "DISPATCH_LOCAL_DEV": "true",
+        },
+    )
+    def test_local_dev_uses_non_namespaced(self):
+        """In local dev the proxy targets the non-namespaced router even when a
+        namespace is configured (the dev router only serves /api/unstable)."""
+        from dispatch_agents._internal.proxy.server import _get_backend_proxy_url
+
+        _load_runtime_config.cache_clear()
+        url = _get_backend_proxy_url()
+        assert url == "http://localhost:4000/api/unstable/llm/proxy"
+        assert "/namespace/" not in url
+
 
 class TestMissingBackendUrl:
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     def test_openai_route_with_namespace(self, mock_client_cls, client):
         """DISPATCH_NAMESPACE set correctly changes the backend URL."""
         mock_client_cls.return_value = _make_mock_client()
 
         with patch.dict(os.environ, {"DISPATCH_NAMESPACE": "custom-ns"}):
+            # Config is cached for the process lifetime; clear so the patched env
+            # is re-read (simulating a fresh process with this namespace set).
+            _load_runtime_config.cache_clear()
             resp = client.post(
                 OPENAI_CHAT_ROUTE,
                 json={
@@ -741,7 +792,7 @@ class TestMissingBackendUrl:
 
 
 class TestTraceContext:
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     def test_request_with_no_trace_headers(self, mock_client_cls, client):
         """Request without X-Dispatch-* headers has no trace fields in payload."""
         mock_client_cls.return_value = _make_mock_client()
@@ -759,7 +810,7 @@ class TestTraceContext:
         assert "trace_id" not in payload
         assert "invocation_id" not in payload
 
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     def test_request_with_subprocess_id(self, mock_client_cls, client):
         """X-Dispatch-Subprocess-Id is forwarded in the payload."""
         mock_client_cls.return_value = _make_mock_client()
@@ -777,7 +828,7 @@ class TestTraceContext:
         payload = mock_client_cls.return_value.post.call_args.kwargs["json"]
         assert payload["subprocess_id"] == "sub-123"
 
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     def test_extra_headers_forwarded(self, mock_client_cls, client):
         """X-Dispatch-Extra-Headers JSON is parsed and included."""
         mock_client_cls.return_value = _make_mock_client()
@@ -831,14 +882,16 @@ class TestGetAuthHeaders:
 
 class TestGetBackendUrls:
     @patch.dict(
-        os.environ, {"BACKEND_URL": "http://test:8080", "DISPATCH_NAMESPACE": "ns1"}
+        os.environ,
+        {"DISPATCH_BACKEND_URL": "http://test:8080", "DISPATCH_NAMESPACE": "ns1"},
     )
     def test_passthrough_url(self):
         url = _get_backend_passthrough_url()
         assert url == "http://test:8080/api/unstable/namespace/ns1/llm/passthrough"
 
     @patch.dict(
-        os.environ, {"BACKEND_URL": "http://test:8080", "DISPATCH_NAMESPACE": "ns1"}
+        os.environ,
+        {"DISPATCH_BACKEND_URL": "http://test:8080", "DISPATCH_NAMESPACE": "ns1"},
     )
     def test_log_url(self):
         url = _get_backend_log_url()
@@ -853,26 +906,21 @@ class TestCallProviderDirectly:
 
     @pytest.mark.asyncio
     async def test_no_api_key_openai(self):
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("_DISPATCH_ORIGINAL_OPENAI_API_KEY", None)
-            resp = await _call_provider_directly({"messages": []}, "openai")
+        resp = await _call_provider_directly({"messages": []}, "openai")
         assert resp.status_code == 401
         body = json.loads(resp.body)
         assert "OPENAI_API_KEY" in body["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_no_api_key_anthropic(self):
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("_DISPATCH_ORIGINAL_ANTHROPIC_API_KEY", None)
-            resp = await _call_provider_directly({"messages": []}, "anthropic")
+        resp = await _call_provider_directly({"messages": []}, "anthropic")
         assert resp.status_code == 401
         body = json.loads(resp.body)
         assert body["type"] == "error"
         assert "ANTHROPIC_API_KEY" in body["error"]["message"]
 
     @pytest.mark.asyncio
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
-    @patch.dict(os.environ, {"_DISPATCH_ORIGINAL_OPENAI_API_KEY": "sk-test"})
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     async def test_connection_error_openai(self, mock_client_cls):
         mock_client = AsyncMock()
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -880,12 +928,15 @@ class TestCallProviderDirectly:
         mock_client.post = AsyncMock(side_effect=httpx.ConnectError("refused"))
         mock_client_cls.return_value = mock_client
 
-        resp = await _call_provider_directly({"messages": []}, "openai")
+        resp = await _call_provider_directly(
+            {"messages": []},
+            "openai",
+            fallback_keys=FallbackKeys(OPENAI_API_KEY="sk-test"),
+        )
         assert resp.status_code == 502
 
     @pytest.mark.asyncio
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
-    @patch.dict(os.environ, {"_DISPATCH_ORIGINAL_ANTHROPIC_API_KEY": "sk-ant-test"})
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     async def test_connection_error_anthropic(self, mock_client_cls):
         mock_client = AsyncMock()
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -893,7 +944,11 @@ class TestCallProviderDirectly:
         mock_client.post = AsyncMock(side_effect=httpx.ConnectError("refused"))
         mock_client_cls.return_value = mock_client
 
-        resp = await _call_provider_directly({"messages": []}, "anthropic")
+        resp = await _call_provider_directly(
+            {"messages": []},
+            "anthropic",
+            fallback_keys=FallbackKeys(ANTHROPIC_API_KEY="sk-ant-test"),
+        )
         assert resp.status_code == 502
         body = json.loads(resp.body)
         assert body["type"] == "error"
@@ -909,16 +964,11 @@ class TestCallProviderPassthrough:
 
     @pytest.mark.asyncio
     async def test_no_api_key(self):
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("_DISPATCH_ORIGINAL_OPENAI_API_KEY", None)
-            resp = await _call_provider_passthrough(
-                "openai", "/v1/models", "GET", None, ""
-            )
+        resp = await _call_provider_passthrough("openai", "/v1/models", "GET", None, "")
         assert resp.status_code == 401
 
     @pytest.mark.asyncio
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
-    @patch.dict(os.environ, {"_DISPATCH_ORIGINAL_OPENAI_API_KEY": "sk-test"})
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     async def test_successful_passthrough(self, mock_client_cls):
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -931,12 +981,18 @@ class TestCallProviderPassthrough:
         mock_client.request = AsyncMock(return_value=mock_response)
         mock_client_cls.return_value = mock_client
 
-        resp = await _call_provider_passthrough("openai", "/v1/models", "GET", None, "")
+        resp = await _call_provider_passthrough(
+            "openai",
+            "/v1/models",
+            "GET",
+            None,
+            "",
+            fallback_keys=FallbackKeys(OPENAI_API_KEY="sk-test"),
+        )
         assert resp.status_code == 200
 
     @pytest.mark.asyncio
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
-    @patch.dict(os.environ, {"_DISPATCH_ORIGINAL_OPENAI_API_KEY": "sk-test"})
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     async def test_connection_error(self, mock_client_cls):
         mock_client = AsyncMock()
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -944,12 +1000,18 @@ class TestCallProviderPassthrough:
         mock_client.request = AsyncMock(side_effect=httpx.ConnectError("refused"))
         mock_client_cls.return_value = mock_client
 
-        resp = await _call_provider_passthrough("openai", "/v1/models", "GET", None, "")
+        resp = await _call_provider_passthrough(
+            "openai",
+            "/v1/models",
+            "GET",
+            None,
+            "",
+            fallback_keys=FallbackKeys(OPENAI_API_KEY="sk-test"),
+        )
         assert resp.status_code == 502
 
     @pytest.mark.asyncio
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
-    @patch.dict(os.environ, {"_DISPATCH_ORIGINAL_OPENAI_API_KEY": "sk-test"})
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     async def test_with_query_string(self, mock_client_cls):
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -963,7 +1025,12 @@ class TestCallProviderPassthrough:
         mock_client_cls.return_value = mock_client
 
         resp = await _call_provider_passthrough(
-            "openai", "/v1/models", "GET", None, "page=1"
+            "openai",
+            "/v1/models",
+            "GET",
+            None,
+            "page=1",
+            fallback_keys=FallbackKeys(OPENAI_API_KEY="sk-test"),
         )
         assert resp.status_code == 200
         call_url = mock_client.request.call_args.kwargs.get("url")
@@ -972,7 +1039,7 @@ class TestCallProviderPassthrough:
 
 class TestLogFallbackCall:
     @pytest.mark.asyncio
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     async def test_logs_openai_call(self, mock_client_cls):
         mock_client = AsyncMock()
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -996,7 +1063,7 @@ class TestLogFallbackCall:
         assert log_payload["model"] == "gpt-4o"
 
     @pytest.mark.asyncio
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     async def test_logs_anthropic_call(self, mock_client_cls):
         mock_client = AsyncMock()
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -1019,7 +1086,7 @@ class TestLogFallbackCall:
         await _log_fallback_call({}, "openai", b"not json", None, None, 0)
 
     @pytest.mark.asyncio
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     async def test_handles_connection_error(self, mock_client_cls):
         mock_client = AsyncMock()
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -1037,7 +1104,7 @@ class TestLogFallbackCall:
 
 
 class TestPassthroughRoute:
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     def test_openai_passthrough_get(self, mock_client_cls, client):
         """GET /openai/v1/models goes through passthrough to backend."""
         mock_response = MagicMock()
@@ -1058,7 +1125,7 @@ class TestPassthroughRoute:
         payload = mock_client.post.call_args.kwargs["json"]
         assert payload["provider_format"] == "openai"
 
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     def test_anthropic_passthrough_get(self, mock_client_cls, client):
         """GET /anthropic/v1/models goes through passthrough."""
         mock_response = MagicMock()
@@ -1146,11 +1213,13 @@ class TestAuthErrorFallback:
             media_type="application/json",
         )
 
-    @patch.dict(os.environ, {"_DISPATCH_ORIGINAL_OPENAI_API_KEY": "sk-agent-key"})
-    @patch("dispatch_agents.proxy.server._call_provider_directly")
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
-    def test_falls_back_on_401(self, mock_client_cls, mock_direct_call, client):
+    @patch("dispatch_agents._internal.proxy.server._call_provider_directly")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
+    def test_falls_back_on_401(
+        self, mock_client_cls, mock_direct_call, client_with_openai_fallback
+    ):
         """Backend returns 401 → sidecar should fall back to agent's own key."""
+        client = client_with_openai_fallback
         mock_client_cls.return_value = _make_mock_client_with_headers(
             AUTH_ERROR_RESPONSE, 401
         )
@@ -1164,13 +1233,13 @@ class TestAuthErrorFallback:
         mock_direct_call.assert_called_once()
         assert resp.status_code == 200
 
-    @patch.dict(os.environ, {"_DISPATCH_ORIGINAL_OPENAI_API_KEY": "sk-agent-key"})
-    @patch("dispatch_agents.proxy.server._call_provider_directly")
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch("dispatch_agents._internal.proxy.server._call_provider_directly")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     def test_fallback_adds_trace_to_cache(
-        self, mock_client_cls, mock_direct_call, client
+        self, mock_client_cls, mock_direct_call, client_with_openai_fallback
     ):
         """After auth error fallback, the trace_id should be cached for future calls."""
+        client = client_with_openai_fallback
         mock_client_cls.return_value = _make_mock_client_with_headers(
             AUTH_ERROR_RESPONSE, 401
         )
@@ -1185,31 +1254,30 @@ class TestAuthErrorFallback:
         assert resp.status_code == 200
         assert "trace-abc" in _fallback_traces
 
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
     def test_no_fallback_without_agent_key(self, mock_client_cls, client):
         """Without an agent key, auth errors should be returned as-is."""
         mock_client_cls.return_value = _make_mock_client_with_headers(
             AUTH_ERROR_RESPONSE, 401
         )
 
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("_DISPATCH_ORIGINAL_OPENAI_API_KEY", None)
-
-            resp = client.post(
-                OPENAI_CHAT_ROUTE,
-                json={
-                    "model": "gpt-4o",
-                    "messages": [{"role": "user", "content": "Hi"}],
-                },
-            )
+        resp = client.post(
+            OPENAI_CHAT_ROUTE,
+            json={
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "Hi"}],
+            },
+        )
 
         assert resp.status_code == 401
 
-    @patch.dict(os.environ, {"_DISPATCH_ORIGINAL_OPENAI_API_KEY": "sk-agent-key"})
-    @patch("dispatch_agents.proxy.server._call_provider_directly")
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
-    def test_falls_back_on_403(self, mock_client_cls, mock_direct_call, client):
+    @patch("dispatch_agents._internal.proxy.server._call_provider_directly")
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
+    def test_falls_back_on_403(
+        self, mock_client_cls, mock_direct_call, client_with_openai_fallback
+    ):
         """403 (forbidden) should also trigger fallback."""
+        client = client_with_openai_fallback
         error_403 = {
             "error": {"message": "Forbidden", "type": "auth_error", "code": "403"}
         }
@@ -1224,21 +1292,21 @@ class TestAuthErrorFallback:
         mock_direct_call.assert_called_once()
         assert resp.status_code == 200
 
-    @patch("dispatch_agents.proxy.server.httpx.AsyncClient")
-    def test_500_does_not_trigger_fallback(self, mock_client_cls, client):
+    @patch("dispatch_agents._internal.proxy.server.httpx.AsyncClient")
+    def test_500_does_not_trigger_fallback(
+        self, mock_client_cls, client_with_openai_fallback
+    ):
         """500 errors should NOT trigger auth fallback."""
+        client = client_with_openai_fallback
         error_500 = {"error": {"message": "Internal error", "type": "server_error"}}
         mock_client_cls.return_value = _make_mock_client_with_headers(error_500, 500)
 
-        with patch.dict(
-            os.environ, {"_DISPATCH_ORIGINAL_OPENAI_API_KEY": "sk-agent-key"}
-        ):
-            resp = client.post(
-                OPENAI_CHAT_ROUTE,
-                json={
-                    "model": "gpt-4o",
-                    "messages": [{"role": "user", "content": "Hi"}],
-                },
-            )
+        resp = client.post(
+            OPENAI_CHAT_ROUTE,
+            json={
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "Hi"}],
+            },
+        )
 
         assert resp.status_code == 500

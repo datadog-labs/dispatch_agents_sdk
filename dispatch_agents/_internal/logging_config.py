@@ -1,11 +1,17 @@
 """Logging configuration for the Dispatch Agents SDK.
 
-Controls the verbosity of SDK logging output via environment variables:
-- DISPATCH_VERBOSE=1 or DISPATCH_VERBOSE=true: Enable verbose/debug logging
-- DISPATCH_LOG_LEVEL=DEBUG/INFO/WARNING/ERROR: Set specific log level
+The SDK log verbosity (DEBUG/INFO/WARNING/ERROR, case-insensitive) is resolved
+in priority order:
 
-By default, the SDK logs at INFO level, hiding debug messages like
-re-subscription events. Enable verbose mode for debugging.
+1. ``DISPATCH_LOG_LEVEL`` environment variable — an operational override set by
+   the platform/CLI (e.g. ``dispatch agent run --verbose``). This is a logging
+   knob, not a config-file channel, so it does not read ``dispatch.yaml``.
+2. The ``log_level`` field in ``dispatch.yaml``, read through the runtime config
+   model (:mod:`dispatch_agents.config`), which is the only reader of the file.
+3. WARNING by default, hiding routine info/debug messages.
+
+Logging sits above config in the dependency graph: config loading never logs,
+so logging can depend on config without a cycle.
 """
 
 import logging
@@ -19,38 +25,34 @@ SDK_LOGGER_NAME = "dispatch_agents"
 _logging_configured = False
 
 
-def _parse_bool_env(value: str | None) -> bool:
-    """Parse boolean from environment variable value."""
-    if value is None:
-        return False
-    return value.lower() in ("1", "true", "yes", "on")
-
-
 def _get_log_level() -> int:
-    """Determine the log level from environment variables.
+    """Resolve the log level from the env override, then config, then default.
 
-    Priority:
-    1. DISPATCH_LOG_LEVEL (explicit level)
-    2. DISPATCH_VERBOSE (boolean toggle for DEBUG)
-    3. Default: WARNING (minimal output)
+    Maps the resolved level name to a :mod:`logging` level. Defaults to WARNING
+    when unset, unknown, or unavailable.
     """
-    # Check explicit log level first
-    log_level_str = os.environ.get("DISPATCH_LOG_LEVEL", "").upper()
-    if log_level_str:
-        level_map = {
-            "DEBUG": logging.DEBUG,
-            "INFO": logging.INFO,
-            "WARNING": logging.WARNING,
-            "WARN": logging.WARNING,
-            "ERROR": logging.ERROR,
-            "CRITICAL": logging.CRITICAL,
-        }
-        if log_level_str in level_map:
-            return level_map[log_level_str]
+    level_map = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+    }
 
-    # Check verbose flag
-    if _parse_bool_env(os.environ.get("DISPATCH_VERBOSE")):
-        return logging.DEBUG
+    # Operational override (platform/CLI-set), then the dispatch.yaml field.
+    level_str = os.environ.get("DISPATCH_LOG_LEVEL")
+    if not level_str:
+        # Lazy import: many SDK modules call get_logger() at import time, so a
+        # module-level import of config would risk a cycle. Config loading is
+        # logger-free, so importing it here cannot recurse back into logging.
+        try:
+            from dispatch_agents.config import config as _config
+
+            level_str = _config.log_level
+        except Exception:
+            level_str = None
+
+    if level_str and (mapped := level_map.get(level_str.upper())) is not None:
+        return mapped
 
     # Default: WARNING to minimize noise
     # Users see errors and warnings, but not routine info/debug
@@ -117,7 +119,7 @@ def get_logger(name: str | None = None) -> logging.Logger:
     configure_logging()
 
     if name:
-        # Create child logger: dispatch_agents.grpc_server, etc.
+        # Create child logger: dispatch_agents._internal.grpc_server, etc.
         if name.startswith(SDK_LOGGER_NAME):
             return logging.getLogger(name)
         return logging.getLogger(f"{SDK_LOGGER_NAME}.{name}")
@@ -128,6 +130,6 @@ def is_verbose() -> bool:
     """Check if verbose logging is enabled.
 
     Returns:
-        True if DISPATCH_VERBOSE is set or log level is DEBUG
+        True if the configured log level is DEBUG
     """
     return _get_log_level() == logging.DEBUG

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dispatch_agents"
-version = "0.13.3"
+version = "0.14.1"
 description = "Dispatch Agents SDK"
 requires-python = ">=3.11"
 dependencies = [
@@ -110,9 +110,13 @@ ignore_errors = true
 add-package = ["dispatch_agents"]
 docformat = "google"
 html-output = "build/apidocs"
-html-viewsource-base = "https://github.com/DataDog/dispatch_agents/tree/main"
-project-name = "Dispatch Agents"
+html-viewsource-base = "https://github.com/datadog-labs/dispatch_agents_sdk/tree/main"
+project-name = "Dispatch Agents Python SDK"
 sidebar-expand-depth = 2
 intersphinx = [
     "https://docs.python.org/3/objects.inv",
+]
+privacy = [
+    "HIDDEN:dispatch_agents._*",
+    "HIDDEN:dispatch_agents.*._*",
 ]

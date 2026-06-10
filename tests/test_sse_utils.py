@@ -1,8 +1,8 @@
-"""Tests for dispatch_agents.proxy.sse_utils module."""
+"""Tests for dispatch_agents._internal.proxy.sse_utils module."""
 
 import time
 
-from dispatch_agents.proxy.sse_utils import StreamingUsageCollector
+from dispatch_agents._internal.proxy.sse_utils import StreamingUsageCollector
 
 # ── StreamingUsageCollector ──────────────────────────────────────────
 

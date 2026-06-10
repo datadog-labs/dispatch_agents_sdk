@@ -1,770 +1,733 @@
-"""Core models for the Dispatch SDK.
+"""Public model definitions for the Dispatch Agents SDK.
 
-This module contains the fundamental data structures used across the entire
-Dispatch ecosystem, including Message types for universal communication and Agent
-for service registration and management.
+This module is the source of truth for agent-facing models. Runtime and backend
+wire contracts that are not intended for agent code live in
+``dispatch_agents._internal.models``.
 
-Message Type Hierarchy (similar to LangChain's BaseMessage pattern):
-- BaseMessage: Abstract base with common fields (uid, trace_id, sender_id, ts, payload)
-- TopicMessage: For @on topic handlers (has 'topic' field)
-- FunctionMessage: For @fn direct calls (has 'function_name' field)
-- ScheduleMessage: For scheduled/cron triggers (has 'schedule_name' field)
-- Message: Discriminated union type alias for routing
+It includes:
+
+- Base handler payload models
+- Current invocation context models
+- Agent invocation status models
+- Runtime configuration models
+- LLM response models
+- Memory response models
+- GitHub client response models
+
+Quick start::
+
+    from dispatch_agents.models import BasePayload
+
+    class MyPayload(BasePayload):
+        message: str
 """
 
-import uuid
-from datetime import UTC, datetime
-from enum import StrEnum, auto
+from __future__ import annotations
+
+from datetime import datetime
+from enum import StrEnum
 from typing import Annotated, Any, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
+from typing_extensions import TypeAliasType
 
-_IDENTIFIER_PATTERN = r"^[a-zA-Z0-9._-]+$"
-_IDENTIFIER_MAX_LENGTH = 128
-Identifier: TypeAlias = Annotated[
-    str,
-    Field(min_length=1, max_length=_IDENTIFIER_MAX_LENGTH, pattern=_IDENTIFIER_PATTERN),
-]
+from dispatch_agents._internal import config_validation as _config_validation
 
-
-def get_now_utc() -> str:
-    """Get the current UTC time in ISO8601 format."""
-    return datetime.now(UTC).isoformat()
-
-
-JsonSchema: TypeAlias = dict[str, Any]
-"""A JSON Schema document, e.g. from Pydantic's model_json_schema()."""
-
-# =============================================================================
-# Feedback Types - Shared across backend, CLI, and SDK
-# =============================================================================
-
-FeedbackType: TypeAlias = Literal["bug", "feature_request", "general"]
-"""Type of customer feedback submission."""
-
-FeedbackSentiment: TypeAlias = Literal["positive", "negative"]
-"""Thumbs up/down sentiment for feedback."""
+JsonScalar: TypeAlias = str | int | float | bool | None
+JsonValue = TypeAliasType(
+    "JsonValue",
+    "JsonScalar | list[JsonValue] | dict[str, JsonValue]",
+)
+JsonArray: TypeAlias = list[JsonValue]
+JsonObject: TypeAlias = dict[str, JsonValue]
 
 
-class StrictBaseModel(BaseModel):
-    """Base model with strict validation that forbids extra fields.
+class BasePayload(BaseModel):
+    """Base class for all dispatch agent handler payloads.
 
-    All Dispatch models inherit from this to ensure API compatibility
-    and catch typos in field names at validation time.
+    Handler input and output models should inherit from this class. It is a
+    strict Pydantic model: unknown fields are rejected during validation so
+    schema drift and payload typos fail early.
+
+    Examples:
+        >>> class MyEventPayload(BasePayload):
+        ...     message: str
+        ...     user_id: int
+        ...
     """
 
     model_config = ConfigDict(extra="forbid")
 
 
-# =============================================================================
-# Message Types - Discriminated Union Pattern
-# =============================================================================
-# Following LangChain's BaseMessage pattern with Pydantic discriminated unions.
-# The 'type' field acts as discriminator - Pydantic routes to correct subclass
-# BEFORE validation, so strict validation (extra='forbid') works correctly.
-# =============================================================================
+class InvocationContext(BaseModel):
+    """Identifiers for the currently running invocation."""
 
-
-class BaseMessage(StrictBaseModel):
-    """Abstract base class for all dispatch messages.
-
-    Similar to LangChain's BaseMessage pattern. Contains common fields
-    shared across all message types. Should not be instantiated directly -
-    use TopicMessage, FunctionMessage, or ScheduleMessage instead.
-
-    | Field      | Type   | Required | Notes                                                                |
-    | ---------- | ------ | -------- | -------------------------------------------------------------------- |
-    | type       | string | always   | Discriminator: "topic", "function", or "schedule"                    |
-    | payload    | object | always   | Business data, validated against registered input model              |
-    | uid        | string | always   | Unique ID per message                                                |
-    | trace_id   | string | always   | Groups related messages into a workflow/session                      |
-    | sender_id  | string | always   | ID of the sending agent/tool                                         |
-    | ts         | string | always   | ISO8601 timestamp of when message was created                        |
-    | parent_id  | string | optional | UID of parent message for building trace trees (None for root events)|
-    """
-
-    type: str  # Abstract - subclasses override with Literal
-    payload: Any
-    uid: str
     trace_id: str
-    sender_id: str
-    ts: str
+    invocation_id: str
     parent_id: str | None = None
 
 
-class TopicMessage(BaseMessage):
-    """Message routed by topic subscription (@on decorator).
+class HandlerMetadata(BaseModel):
+    """Serializable handler metadata for registration and introspection."""
 
-    Used for event-driven communication where agents subscribe to topics
-    and receive messages published to those topics.
-    """
+    model_config = ConfigDict(extra="forbid")
 
-    type: Literal["topic"] = "topic"
-    topic: str = Field(description="Event topic for subscription-based routing")
-
-    @classmethod
-    def create(
-        cls,
-        topic: str,
-        payload: Any,
-        sender_id: str,
-        trace_id: str | None = None,
-        parent_id: str | None = None,
-        _uid: str | None = None,
-        _ts: str | None = None,
-    ) -> "TopicMessage":
-        """Create a new TopicMessage with auto-generated fields."""
-        return cls(
-            topic=topic,
-            payload=payload,
-            sender_id=sender_id,
-            trace_id=trace_id or str(uuid.uuid4()),
-            parent_id=parent_id,
-            uid=_uid or str(uuid.uuid4()),
-            ts=_ts or get_now_utc(),
-        )
-
-
-class FunctionMessage(BaseMessage):
-    """Message for direct function invocation (@fn decorator).
-
-    Used when one agent calls a function on another agent directly,
-    bypassing topic-based routing.
-    """
-
-    type: Literal["function"] = "function"
-    function_name: str = Field(description="Name of the @fn function to invoke")
-
-    @classmethod
-    def create(
-        cls,
-        function_name: str,
-        payload: Any,
-        sender_id: str,
-        trace_id: str | None = None,
-        parent_id: str | None = None,
-        _uid: str | None = None,
-        _ts: str | None = None,
-    ) -> "FunctionMessage":
-        """Create a new FunctionMessage with auto-generated fields."""
-        return cls(
-            type="function",
-            function_name=function_name,
-            payload=payload,
-            sender_id=sender_id,
-            trace_id=trace_id or str(uuid.uuid4()),
-            parent_id=parent_id,
-            uid=_uid or str(uuid.uuid4()),
-            ts=_ts or get_now_utc(),
-        )
-
-
-class ScheduleMessage(BaseMessage):
-    """Message triggered by a schedule/cron job.
-
-    Used for time-based triggers where the system invokes an agent
-    function based on a schedule configuration.
-    """
-
-    type: Literal["schedule"] = "schedule"
-    schedule_name: str = Field(description="Schedule ID that triggered this invocation")
-    function_name: str = Field(description="Name of the function being invoked")
-
-    @classmethod
-    def create(
-        cls,
-        schedule_name: str,
-        function_name: str,
-        payload: Any,
-        sender_id: str,
-        trace_id: str | None = None,
-        parent_id: str | None = None,
-        _uid: str | None = None,
-        _ts: str | None = None,
-    ) -> "ScheduleMessage":
-        """Create a new ScheduleMessage with auto-generated fields."""
-        return cls(
-            type="schedule",
-            schedule_name=schedule_name,
-            function_name=function_name,
-            payload=payload,
-            sender_id=sender_id,
-            trace_id=trace_id or str(uuid.uuid4()),
-            parent_id=parent_id,
-            uid=_uid or str(uuid.uuid4()),
-            ts=_ts or get_now_utc(),
-        )
-
-
-class LLMCallMessage(BaseMessage):
-    """Message representing an LLM inference call.
-
-    Used to track LLM calls within a trace, enabling unified trace views
-    that show LLM interactions alongside invocations and topic messages.
-
-    The parent_id field can point to:
-    - An invocation UID: The LLM call was made by this invocation
-    - Another LLM call UID: The LLM call is a continuation (e.g., after tool execution)
-
-    Children of this LLM call (invocations with parent_id pointing here) represent
-    tool call results - invocations triggered by the LLM's tool_calls response.
-    """
-
-    type: Literal["llm_call"] = "llm_call"
-
-    # LLM-specific fields
-    model: str = Field(description="Model used (e.g., gpt-4o, claude-3-5-sonnet)")
-    provider: str = Field(description="Provider (e.g., openai, anthropic)")
-    messages: list[dict[str, Any]] = Field(description="Request messages sent to LLM")
-    response: str | None = Field(default=None, description="LLM response text")
-    finish_reason: str = Field(
-        description="Completion reason: stop, tool_calls, length, etc."
-    )
-
-    # Usage metrics
-    input_tokens: int = Field(description="Prompt token count")
-    output_tokens: int = Field(description="Completion token count")
-    cost_usd: float = Field(description="Calculated cost in USD")
-    latency_ms: int = Field(description="Response time in milliseconds")
-
-    # Optional fields
-    tools: list[dict[str, Any]] | None = Field(
-        default=None, description="Tool definitions if function calling was used"
-    )
-    tool_calls: list[dict[str, Any]] | None = Field(
-        default=None, description="Tool calls from response"
-    )
-    variant_name: str | None = Field(
-        default=None, description="A/B test variant if applicable"
-    )
-
-    @classmethod
-    def create(
-        cls,
-        *,
-        model: str,
-        provider: str,
-        messages: list[dict[str, Any]],
-        finish_reason: str,
-        input_tokens: int,
-        output_tokens: int,
-        cost_usd: float,
-        latency_ms: int,
-        sender_id: str,
-        trace_id: str,
-        parent_id: str | None = None,
-        response: str | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        tool_calls: list[dict[str, Any]] | None = None,
-        variant_name: str | None = None,
-        _uid: str | None = None,
-        _ts: str | None = None,
-    ) -> "LLMCallMessage":
-        """Create a new LLMCallMessage with auto-generated fields.
-
-        Args:
-            model: Model used for inference
-            provider: LLM provider
-            messages: Request messages
-            finish_reason: Why the LLM stopped generating
-            input_tokens: Number of input tokens
-            output_tokens: Number of output tokens
-            cost_usd: Cost in USD
-            latency_ms: Latency in milliseconds
-            sender_id: Agent/caller that made this LLM call
-            trace_id: Trace ID for correlation
-            parent_id: Parent invocation or LLM call UID
-            response: LLM response text
-            tools: Tool definitions
-            tool_calls: Tool calls from response
-            variant_name: A/B test variant
-            _uid: Override UID (auto-generated if not provided)
-            _ts: Override timestamp
-        """
-        uid = _uid or str(uuid.uuid4())
-        return cls(
-            type="llm_call",
-            model=model,
-            provider=provider,
-            messages=messages,
-            finish_reason=finish_reason,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cost_usd=cost_usd,
-            latency_ms=latency_ms,
-            sender_id=sender_id,
-            trace_id=trace_id,
-            parent_id=parent_id,
-            response=response,
-            tools=tools,
-            tool_calls=tool_calls,
-            variant_name=variant_name,
-            # BaseMessage fields - payload is empty for LLM calls (data is in specific fields)
-            payload={},
-            uid=uid,
-            ts=_ts or get_now_utc(),
-        )
-
-
-# Discriminated union - Pydantic routes by 'type' field before validation
-# This means strict validation (extra='forbid') works correctly with subclass fields
-Message = Annotated[
-    TopicMessage | FunctionMessage | ScheduleMessage | LLMCallMessage,
-    Field(discriminator="type"),
-]
-
-
-# =============================================================================
-# Handler Response Payloads
-# =============================================================================
-# These are serialized into the gRPC InvokeResponse.result field.
-# The proto's is_error bool tells the backend which type to deserialize to.
-# =============================================================================
-
-
-class SuccessPayload(StrictBaseModel):
-    """Successful handler execution result.
-
-    Serialized into InvokeResponse.result when is_error=False.
-    """
-
-    result: Any = Field(
-        description="Handler return value (any JSON-serializable value)"
-    )
-
-
-class ErrorPayload(StrictBaseModel):
-    """Failed handler execution result.
-
-    Serialized into InvokeResponse.result when is_error=True.
-    Contains structured error information for debugging and display.
-    """
-
-    error: str = Field(description="Error message")
-    error_type: str = Field(
-        description="Exception class name (e.g., 'ValidationError', 'ValueError')"
-    )
-    trace: str | None = Field(default=None, description="Full traceback for debugging")
-    details: Any | None = Field(
-        default=None,
-        description="Additional error details (e.g., Pydantic validation errors list)",
-    )
-
-
-class AgentContainerStatus(StrEnum):
-    BUILDING = auto()  # agent created/updated when codebuild starts
-    DEPLOYING = auto()  # image built, ecs rolling update in progress
-    DEPLOYED = auto()  # ip/dns alias available from ecs, ready to be health-checked
-    ERROR = auto()  # ecs task failed to launch/retrying
-    HEALTHY = auto()  # passed health check from in-memory registry
-    UNHEALTHY = (
-        auto()
-    )  # deployed agent went from healthy->unhealthy or never passed health check
-    DISABLED = (
-        auto()
-    )  # intentionally stopped/disabled, will not be considered for health check
-
-
-class FunctionTrigger(StrictBaseModel):
-    """Trigger configuration for an agent function.
-
-    Defines how and when an agent function is invoked. Currently supports:
-    - topic: Event-driven triggers from subscribed topics
-    - callable: Direct function calls from other agents via invoke()
-    - schedule: Time-based triggers (future)
-    """
-
-    type: Literal["topic", "schedule", "callable"] = Field(
-        description="Trigger type: 'topic' for event-driven, 'callable' for direct invocation, 'schedule' for cron-based"
-    )
-    topic: str | None = Field(
-        default=None,
-        description="Topic name when type='topic'. Events published to this topic will invoke the function.",
-    )
-    function_name: str | None = Field(
-        default=None,
-        description="Function name when type='callable'. Other agents can invoke this function by name.",
-    )
-    # Future fields for schedule triggers:
-    # cron_expression: str | None - Cron syntax for schedule
-    # timezone: str | None - Timezone for schedule interpretation
-    # enabled: bool - Whether schedule is active
-
-
-class AgentFunction(StrictBaseModel):
-    """Agent function with input/output schemas and triggers.
-
-    Represents a handler function in an agent, including its schemas and
-    the triggers that can invoke it (topics, schedules, etc.).
-    """
-
-    name: Identifier = Field(description="Handler function name")
-    description: str | None = Field(
-        default=None, description="Handler docstring or description"
-    )
-    input_schema: JsonSchema = Field(
-        description="JSON Schema for input payload validation"
-    )
-    output_schema: JsonSchema | None = Field(
-        default=None, description="JSON Schema for output payload (if any)"
-    )
-    triggers: list[FunctionTrigger] = Field(
-        default_factory=list, description="Triggers that invoke this function"
-    )
-
-
-class Agent(StrictBaseModel):
-    """Agent registration and metadata model.
-
-    Uses composite uid (org_id#namespace#name) as unique identifier.
-    The name field stores the ECS-sanitized agent name.
-    """
-
-    # === Persistent fields (stored in DynamoDB) ===
-    name: str = Field(
-        description="ECS-sanitized agent name (used in uid composite key)"
-    )
-    org_id: str = Field(description="Organization ID for multi-tenancy")
-    namespace: str = Field(description="Namespace for logical isolation within org")
-    status: AgentContainerStatus = Field(
-        default=AgentContainerStatus.BUILDING,
-        description="Agent deployment/health status",
-    )
-    created_at: str = Field(description="ISO8601 timestamp when agent was created")
-    last_updated: str = Field(
-        description="ISO8601 timestamp when DB record was updated"
-    )
-    url: str | None = Field(default=None, description="Agent DNS alias endpoint URL")
-    version: str | None = Field(
-        default=None, description="Current deployed version from S3"
-    )
-    last_deployed: str | None = Field(
-        default=None,
-        description="ISO8601 timestamp of last successful deployment",
-    )
-    monthly_budget_usd: float | None = Field(
-        default=None,
-        description="Monthly LLM spend limit in USD. If set, inference requests "
-        "are blocked when the agent exceeds this amount in the current month.",
-    )
-
-    # === Runtime fields (in-memory only, not persisted to DynamoDB) ===
-    functions: list[AgentFunction] = Field(
-        default_factory=list,
-        description="Agent functions with their triggers, schemas, and metadata. "
-        "Each function can have multiple triggers (topics, schedules, etc.).",
-    )
-    last_heartbeat: str | None = Field(
-        default=None, description="ISO8601 timestamp of last heartbeat"
-    )
-    metadata: dict[str, Any] = Field(
-        default_factory=dict, description="Additional runtime metadata"
-    )
-
-    @field_validator("name")
-    def validate_name(cls, v):
-        Agent._validate_identifier(v, "Agent name")
-        Agent._sanitize_ecs_name(v, fallback=None)
-        return v
-
-    @field_validator("namespace")
-    def validate_namespace(cls, v):
-        Agent._validate_identifier(v, "Namespace")
-        return v
-
-    @classmethod
-    def create(
-        cls, name: str, functions: list[AgentFunction] | None = None, **kwargs
-    ) -> "Agent":
-        """Create a new Agent with ECS-sanitized name and timestamp."""
-        sanitized_name = cls._sanitize_ecs_name(name)
-        return cls(
-            name=sanitized_name,
-            functions=functions or [],
-            created_at=get_now_utc(),
-            last_updated=get_now_utc(),
-            **kwargs,
-        )
-
-    def get_network_url(self, base_url: str | None = None) -> str:
-        """Get the network URL for this agent."""
-        if base_url:
-            return f"{base_url.rstrip('/')}/{self.name}/dispatch"
-        return f"http://{self.name}.trigger/dispatch"
-
-    def handles_topic(self, topic: str) -> bool:
-        """Check if this agent handles the given topic (supports wildcards)."""
-        # Extract all topic triggers from functions
-        for function in self.functions:
-            for trigger in function.triggers:
-                if trigger.type == "topic" and trigger.topic:
-                    agent_topic = trigger.topic
-                    if agent_topic.endswith("*"):
-                        if topic.startswith(agent_topic[:-1]):
-                            return True
-                    elif agent_topic == topic:
-                        return True
-        return False
-
-    @staticmethod
-    def transform_topic_schemas_to_functions(
-        topic_schemas: dict[str, dict[str, Any]],
-    ) -> list[AgentFunction]:
-        """Transform legacy topic_schemas dict to functions list.
-
-        Used during agent registration to convert SDK-provided schemas
-        into the new functions format.
-
-        Args:
-            topic_schemas: Dict mapping topic names to schema metadata.
-                Each topic maps to a dict with keys: handler_name (str),
-                handler_doc (str or None), input_schema (dict),
-                output_schema (dict or None).
-
-        Returns:
-            List of AgentFunction objects, one per topic.
-        """
-        functions = []
-        for topic, schema_metadata in topic_schemas.items():
-            function = AgentFunction(
-                name=schema_metadata.get("handler_name", "handler"),
-                description=schema_metadata.get("handler_doc"),
-                input_schema=schema_metadata.get("input_schema", {}),
-                output_schema=schema_metadata.get("output_schema"),
-                triggers=[FunctionTrigger(type="topic", topic=topic)],
-            )
-            functions.append(function)
-        return functions
-
-    @staticmethod
-    def _validate_identifier(
-        identifier: str, identifier_type: str = "identifier"
-    ) -> None:
-        """Validate that an identifier doesn't contain colon character.
-
-        Colons are reserved as delimiters in task queue names to enable reliable parsing.
-
-        Args:
-            identifier: The string to validate (namespace, agent_name, etc.)
-            identifier_type: Description of what's being validated (for error messages)
-
-        Raises:
-            ValueError: If identifier contains a colon
-        """
-        if ":" in identifier:
-            raise ValueError(
-                f"{identifier_type} cannot contain colon ':' character "
-                f"(reserved as task queue delimiter): {identifier}"
-            )
-
-    @staticmethod
-    def _sanitize_ecs_name(name: str, fallback: str | None = None) -> str:
-        """Return a string valid for ECS names (family/service/container).
-        If fallback is None, raise exception if name is invalid.
-        Allowed characters are letters, numbers, hyphens, and underscores. Length must be 1-255.
-        Any other character is replaced with '-'. If the result is empty, use the fallback.
-        """
-        sanitized = "".join(ch if (ch.isalnum() or ch in "-_") else "-" for ch in name)
-        sanitized = sanitized.strip("-_")
-        if sanitized:
-            return sanitized[:255]
-        elif fallback is not None:
-            return Agent._sanitize_ecs_name(
-                fallback, None
-            )  # recurse to sanitize fallback
-        else:
-            raise ValueError(
-                f"Name '{name}' cannot be sanitized, and no fallback provided (or fallback also could not be sanitized)."
-            )
-
-    @staticmethod
-    def build_uid(org_id: str, namespace: str, agent_name: str) -> str:
-        """Build composite agent UID from components.
-
-        Args:
-            org_id: Organization identifier
-            namespace: Namespace identifier
-            agent_name: Agent name (ECS-sanitized)
-
-        Returns:
-            Composite UID in format: org_id#namespace#agent_name
-
-        Raises:
-            ValueError: If any component contains '#' separator
-
-        Example:
-            >>> Agent.build_uid("org123", "default", "my-agent")
-            "org123#default#my-agent"
-        """
-        if "#" in org_id or "#" in namespace or "#" in agent_name:
-            raise ValueError(
-                "Components cannot contain '#' separator. "
-                f"org_id={org_id}, namespace={namespace}, agent_name={agent_name}"
-            )
-        return f"{org_id}#{namespace}#{agent_name}"
-
-    @property
-    def uid(self) -> str:
-        """Computed unique identifier across all orgs and namespaces.
-
-        This property is computed from org_id, namespace, and name.
-        It is NOT stored in DynamoDB - only used as the primary key.
-
-        Format: org_id#namespace#name
-
-        Example:
-            >>> agent = Agent(name="my-agent", org_id="org123", namespace="default", ...)
-            >>> agent.uid
-            "org123#default#my-agent"
-        """
-        return Agent.build_uid(self.org_id, self.namespace, self.name)
-
-
-# Router API Models for compatibility across implementations
-class PublishEventBody(StrictBaseModel):
-    """Request body for publishing events to any dispatch router."""
-
-    topic: str
-    sender_id: str = "web-ui"
-    payload: Any = Field(default_factory=dict)
-    trace_id: str | None = None
-    parent_id: str | None = None
-
-
-class SubscriptionBody(StrictBaseModel):
-    """Request body for agent subscription management."""
-
-    topics: list[Identifier] = Field(default_factory=list)
-    agent_name: Identifier
-    functions: list[AgentFunction] = Field(min_length=1)
-
-
-class EventRequest(StrictBaseModel):
-    """CLI router specific event request format."""
-
-    payload: Any
-    sender_id: str | None = "router"
-
-
-class PublishResponse(StrictBaseModel):
-    """Standard response for event publishing operations.
-
-    When publishing to a topic, returns invocation IDs for all handlers triggered.
-    Clients can poll these invocations to get results (similar to invoke() pattern).
-    """
-
-    message: str
-    event_uid: str
-    invocation_ids: list[str] = []  # Invocation IDs for handlers triggered
-    handler_count: int = 0  # Number of handlers triggered
-
-
-from dispatch_agents.invocation import InvocationStatus
-
-
-class InvokeFunctionRequest(StrictBaseModel):
-    """Request to invoke a function on an agent.
-
-    This is the payload for POST /api/unstable/namespace/{namespace}/invoke
-    Used by the SDK's invoke() function and must match backend/local router expectations.
-    """
-
-    agent_name: str = Field(description="Target agent name")
-    function_name: str = Field(description="Function name to invoke")
-    payload: dict[str, Any] = Field(
-        default_factory=dict, description="Input payload for the function"
-    )
-    trace_id: str | None = Field(
-        default=None, description="Optional trace ID for distributed tracing"
-    )
-    parent_id: str | None = Field(
-        default=None, description="Optional parent span ID for distributed tracing"
-    )
-    timeout_seconds: int | None = Field(
-        default=None,
-        description="Optional timeout in seconds for the invocation. Defaults to 1 hour (3600s). Maximum is 24 hours (86400s).",
-        ge=1,
-        le=86400,
-    )
-
-
-class InvocationStatusResponse(StrictBaseModel):
-    """Response from polling an invocation status.
-
-    Returned by GET /api/unstable/namespace/{namespace}/invoke/{invocation_id}
-    Contains the current status, agent/function info, and result (when completed).
-    """
-
-    invocation_id: str = Field(description="Unique invocation identifier")
-    status: InvocationStatus = Field(description="Current invocation status")
-    agent_name: str = Field(description="Target agent name")
-    function_name: str = Field(description="Function name")
-    trace_id: str = Field(description="Trace ID for distributed tracing")
-    result: Any | None = Field(
-        default=None, description="Result payload (when status is COMPLETED)"
-    )
-    error: str | None = Field(
-        default=None, description="Error message (when status is ERROR)"
-    )
-    created_at: str = Field(
-        description="ISO 8601 timestamp when invocation was created"
-    )
-
-
-class SubscriptionResponse(StrictBaseModel):
-    """Standard response for subscription management operations."""
-
-    message: str
+    handler_name: str
     topics: list[str]
-    agent_name: str
-    subscribers: dict[str, int]
+    input_schema: JsonObject
+    output_schema: JsonObject | None
+    handler_doc: str | None
 
 
-########################################################
-# Memory Models
-########################################################
+class InvocationStatus(StrEnum):
+    """Status of a direct function invocation."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    ERROR = "error"
 
 
-class KVStoreRequest(StrictBaseModel):
-    agent_name: str
-    key: str
-    value: str = Field(default="")
+class InvocationResult(BaseModel):
+    """Untyped result returned by a direct function invocation.
+
+    The ``result`` attribute is the canonical API. Mapping-style access is kept
+    for compatibility with existing agents that treated untyped invoke results
+    as dictionaries.
+    """
+
+    result: JsonValue = None
+
+    def __contains__(self, key: object) -> bool:
+        if key == "result":
+            return True
+        return (
+            isinstance(key, str)
+            and isinstance(self.result, dict)
+            and key in self.result
+        )
+
+    def __getitem__(self, key: str) -> JsonValue:
+        if key == "result":
+            return self.result
+        if isinstance(self.result, dict):
+            return self.result[key]
+        raise KeyError(key)
+
+    def get(self, key: str, default: JsonValue = None) -> JsonValue:
+        if key == "result":
+            return self.result
+        if isinstance(self.result, dict):
+            return self.result.get(key, default)
+        return default
 
 
-class SessionStoreRequest(StrictBaseModel):
-    agent_name: str
-    session_id: str
-    session_data: dict[str, Any] = Field(default_factory=dict)
+class MemoryWriteResponse(BaseModel):
+    """Response from a memory write or delete operation."""
 
-
-class MemoryWriteResponse(StrictBaseModel):
-    """Response from a memory write (add/delete) operation."""
+    model_config = ConfigDict(extra="forbid")
 
     message: str
 
 
-class KVGetResponse(StrictBaseModel):
+class KVGetResponse(BaseModel):
     """Response from a long-term memory get operation."""
+
+    model_config = ConfigDict(extra="forbid")
 
     value: str | None
 
 
-class KVMemoryRecord(StrictBaseModel):
-    """A single long-term memory record."""
+class KVMemoryRecord(BaseModel):
+    """A single long-term memory record returned by a list operation."""
+
+    model_config = ConfigDict(extra="forbid")
 
     mem_key: str
     mem_value: str
     last_updated: str | None = None
 
 
-class KVListResponse(StrictBaseModel):
+class KVListResponse(BaseModel):
     """Response from a long-term memory list operation."""
+
+    model_config = ConfigDict(extra="forbid")
 
     agent_name: str
     memories: list[KVMemoryRecord]
 
 
-class SessionGetResponse(StrictBaseModel):
+class SessionGetResponse(BaseModel):
     """Response from a short-term memory get operation."""
 
-    session_data: dict[str, Any]
+    model_config = ConfigDict(extra="forbid")
+
+    session_data: JsonObject = Field(default_factory=dict)
+
+
+class LLMFunctionCall(BaseModel):
+    """A function call within an LLM tool call."""
+
+    name: str
+    # "arguments" is a JSON-encoded string per the OpenAI chat completions API
+    # (e.g. '{"location": "NYC"}'), not a collection. The singular concept is
+    # "the arguments blob"; the plural name mirrors the upstream API field name.
+    arguments: str
+
+
+class LLMToolCall(BaseModel):
+    """A tool call from the LLM response."""
+
+    id: str
+    type: str = "function"
+    function: LLMFunctionCall
+
+
+class LLMMessage(BaseModel):
+    """A message in an LLM conversation."""
+
+    role: str  # system, user, assistant, tool
+    content: str | list[JsonObject]
+    name: str | None = None
+    tool_call_id: str | None = None
+    # Tool calls made by an assistant message (OpenAI-style call descriptors).
+    # Same shape as ``LLMResponse.tool_calls`` so a response can be replayed as
+    # the next request message without re-shaping.
+    tool_calls: list[LLMToolCall] | None = None
+
+
+class LLMResponse(BaseModel):
+    """Response from LLM inference."""
+
+    llm_call_id: str
+    content: str | None
+    tool_calls: list[LLMToolCall] | None
+    finish_reason: str
+    model: str
+    provider: str
+    variant_name: str | None
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+    latency_ms: int
+
+
+class GitHubAppToken(BaseModel):
+    """Short-lived GitHub App installation token returned by Dispatch."""
+
+    token: str
+    expires_at: datetime
+
+
+class McpHttpServerConfig(BaseModel):
+    """HTTP transport configuration for an MCP server."""
+
+    type: Literal["http"] = "http"
+    url: str
+    headers: dict[str, str] = Field(default_factory=dict)
+
+
+class MCPToolCallResult(BaseModel):
+    """Result returned by an MCP tool call."""
+
+    content: list[JsonObject] = Field(default_factory=list)
+    is_error: bool = Field(default=False, alias="isError")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class MCPTool(BaseModel):
+    """Tool definition returned by an MCP server."""
+
+    name: str
+    description: str | None = None
+    input_schema: JsonObject = Field(default_factory=dict, alias="inputSchema")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class MCPListToolsResult(BaseModel):
+    """Tools listed from an MCP server."""
+
+    tools: list[MCPTool] = Field(default_factory=list)
+
+
+class MCPResource(BaseModel):
+    """Resource definition returned by an MCP server."""
+
+    data: JsonObject = Field(default_factory=dict)
+
+
+class MCPListResourcesResult(BaseModel):
+    """Resources listed from an MCP server."""
+
+    resources: list[MCPResource] = Field(default_factory=list)
+
+
+class MCPReadResourceResult(BaseModel):
+    """Resource contents returned by an MCP server."""
+
+    contents: list[JsonObject] = Field(default_factory=list)
+
+
+class MCPPrompt(BaseModel):
+    """Prompt definition returned by an MCP server."""
+
+    data: JsonObject = Field(default_factory=dict)
+
+
+class MCPListPromptsResult(BaseModel):
+    """Prompts listed from an MCP server."""
+
+    prompts: list[MCPPrompt] = Field(default_factory=list)
+
+
+class MCPGetPromptResult(BaseModel):
+    """Prompt payload returned by an MCP server."""
+
+    data: JsonObject = Field(default_factory=dict)
+
+
+class VolumeMode(StrEnum):
+    """Volume access mode for persistent storage."""
+
+    READ_WRITE_MANY = "read_write_many"
+
+
+class VolumeConfig(BaseModel):
+    """Configuration for a persistent storage volume.
+
+    Volumes provide persistent storage that survives container restarts
+    and redeployments. Data is isolated per-agent.
+
+    Example:
+        volumes:
+          - name: plans
+            mountPath: /data/plans
+            mode: read_write_many
+    """
+
+    name: str = Field(
+        ...,
+        description="Unique name for the volume (used for identification and cleanup)",
+        min_length=1,
+        max_length=63,
+        pattern=r"^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$",
+    )
+    mount_path: Annotated[
+        str, AfterValidator(_config_validation.normalize_mount_path)
+    ] = Field(
+        ...,
+        alias="mountPath",
+        description="Path where the volume will be mounted inside the container (must be within /data)",
+    )
+    mode: VolumeMode = Field(
+        ...,
+        description="Access mode for the volume (required)",
+    )
+
+    model_config = {"populate_by_name": True}
+
+
+class SecretConfig(BaseModel):
+    """Configuration for a secret to be injected as an environment variable.
+
+    Secrets are retrieved from the secrets manager and injected into the
+    container as environment variables at runtime.
+
+    Example:
+        secrets:
+          - name: OPENAI_API_KEY
+            secret_id: /shared/openai-api-key
+    """
+
+    name: str = Field(
+        ...,
+        description="Environment variable name for the secret",
+        min_length=1,
+    )
+    secret_id: str = Field(
+        ...,
+        description="Path to the secret in secrets manager",
+        min_length=1,
+    )
+
+
+class MCPServerConfig(BaseModel):
+    """Configuration for an MCP server to connect to.
+
+    Example:
+        mcp_servers:
+          - server: datadog
+    """
+
+    server: str = Field(
+        ...,
+        description="MCP server installation name from the registry",
+        min_length=1,
+    )
+
+
+class ResourceLimits(BaseModel):
+    """CPU and memory limits for a container.
+
+    CPU is specified in Kubernetes format:
+    - Millicores: "250m", "500m", "1000m"
+    - Cores: "0.25", "0.5", "1", "2"
+
+    Memory is specified in Kubernetes format:
+    - Mebibytes: "512Mi", "1024Mi"
+    - Gibibytes: "1Gi", "2Gi"
+
+    Example:
+        limits:
+          cpu: "500m"
+          memory: "1Gi"
+    """
+
+    cpu: Annotated[str, AfterValidator(_config_validation.validate_cpu)] = Field(
+        default="250m",
+        description="CPU (e.g., '250m', '500m', '1', '2')",
+    )
+    memory: Annotated[str, AfterValidator(_config_validation.validate_memory)] = Field(
+        default="2Gi",
+        description="Memory (e.g., '512Mi', '1Gi', '2Gi')",
+    )
+
+    @model_validator(mode="after")
+    def _validate_combination(self) -> ResourceLimits:
+        return _config_validation.validate_resource_limits(self)
+
+
+class ResourceConfig(BaseModel):
+    """Configuration for agent container resources.
+
+    Resources are expressed as limits.
+
+    Example:
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "1Gi"
+    """
+
+    limits: ResourceLimits = Field(
+        default_factory=ResourceLimits,
+        description="Resource limits (CPU and memory)",
+    )
+
+
+class DomainSelector(BaseModel):
+    """A single domain selector -- exactly one of match_name or match_pattern.
+
+    match_name is an exact FQDN (e.g. api.openai.com).
+    match_pattern is a wildcard prefix (e.g. ``*.github.com``).
+
+    Serialises with camelCase aliases (matchName / matchPattern) to match the
+    downstream Cilium FQDN selector API.
+    """
+
+    match_name: str | None = Field(
+        default=None,
+        description="Exact FQDN to allow. Must match the entire domain name exactly "
+        "(e.g. 'api.openai.com' matches only 'api.openai.com').",
+    )
+    match_pattern: str | None = Field(
+        default=None,
+        description="Wildcard pattern to allow. Uses '*.domain.com' syntax to match "
+        "any subdomain of the specified domain (e.g. '*.github.com' matches "
+        "'api.github.com' and 'raw.github.com' but not 'github.com' itself).",
+    )
+
+    @model_validator(mode="after")
+    def _validate_exactly_one_field(self) -> DomainSelector:
+        return _config_validation.validate_domain_selector(self)
+
+    model_config = {"extra": "forbid"}
+
+
+class EgressConfig(BaseModel):
+    """Configuration for network egress allow list.
+
+    Domains are specified as objects with either matchName (exact FQDN)
+    or matchPattern (wildcard prefix). This is a subset of the
+    downstream Cilium FQDN selector API.
+
+    Example::
+
+        network:
+          egress:
+            allow_domains:
+              - match_name: api.openai.com
+              - match_pattern: "*.github.com"
+    """
+
+    allow_domains: Annotated[
+        list[DomainSelector],
+        AfterValidator(_config_validation.validate_allow_domains),
+    ] = Field(
+        default_factory=list,
+        description="Domains allowed for egress as Cilium FQDN selectors.",
+    )
+
+
+class NetworkConfig(BaseModel):
+    """Network configuration for an agent.
+
+    When present in dispatch.yaml, CiliumNetworkPolicies are created to
+    restrict the agent's outbound traffic to platform services and any
+    listed allow_domains.  When absent, all egress is unrestricted.
+
+    Example::
+
+        network:
+          egress:
+            allow_domains:
+              - match_name: api.openai.com
+              - match_pattern: "*.github.com"
+    """
+
+    egress: EgressConfig = Field(default_factory=EgressConfig)
+
+
+class DispatchConfig(BaseModel):
+    """Configuration model for dispatch.yaml files.
+
+    This model defines the complete schema for agent deployment configuration.
+    It supports validation, serialization, and provides clear documentation
+    for all configuration options.
+
+    Example dispatch.yaml::
+
+        namespace: skunkworks
+        agent_name: my-agent
+        entrypoint: agent.py
+        base_image: python:3.13-slim
+        env:
+          LOG_LEVEL: debug
+          MY_APP_MODE: production
+        volumes:
+          - name: data
+            mountPath: /data
+            mode: read_write_many
+        secrets:
+          - name: OPENAI_API_KEY
+            secret_id: /shared/openai-api-key
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "1Gi"
+    """
+
+    namespace: str | None = Field(
+        default=None,
+        description="Namespace for agent deployment (required for deployment)",
+    )
+    agent_name: str | None = Field(
+        default=None,
+        description="Unique name for the agent",
+    )
+    entrypoint: str | None = Field(
+        default=None,
+        description="Python file containing agent handlers (default: agent.py)",
+    )
+    base_image: str | None = Field(
+        default=None,
+        description="Base Docker image for the agent container",
+    )
+    system_packages: list[str] | None = Field(
+        default=None,
+        description="Additional system packages to install (apt packages)",
+    )
+    local_dependencies: dict[str, str] | None = Field(
+        default=None,
+        description="Local path dependencies to bundle (name -> path mapping)",
+    )
+    env: Annotated[
+        dict[str, str] | None,
+        BeforeValidator(_config_validation.check_env_values_are_strings),
+        AfterValidator(_config_validation.validate_reserved_env),
+    ] = Field(
+        default=None,
+        description="Plain environment variables to inject into the container (non-secret)",
+    )
+
+    vars: Annotated[
+        JsonObject | None,
+        BeforeValidator(_config_validation.validate_vars),
+    ] = Field(
+        default=None,
+        description="Configuration variables accessible at runtime via dispatch_agents.config.vars. "
+        "Unlike env, these are NOT injected as environment variables. "
+        "Supports any YAML-serializable type. Use {value: <any>, description: <str>} "
+        "to attach descriptions for the UI.",
+    )
+
+    secrets: list[SecretConfig] | None = Field(
+        default=None,
+        description="Secrets to inject as environment variables",
+    )
+    volumes: list[VolumeConfig] | None = Field(
+        default=None,
+        description="Persistent storage volumes to mount",
+    )
+    mcp_servers: list[MCPServerConfig] | None = Field(
+        default=None,
+        description="MCP servers to connect to from the registry",
+    )
+    resources: ResourceConfig = Field(
+        default_factory=ResourceConfig,
+        description="Container resource limits (CPU and memory)",
+    )
+    network: NetworkConfig | None = Field(
+        default=None,
+        description="Network egress restrictions. When set, CiliumNetworkPolicies restrict outbound traffic.",
+    )
+    llm_instrument: bool = Field(
+        default=True,
+        description=(
+            "Route LLM calls through the Dispatch sidecar proxy for tracing and "
+            "cost tracking. Set false to call providers directly with your own keys."
+        ),
+    )
+    log_level: str | None = Field(
+        default=None,
+        description=(
+            "SDK log verbosity: DEBUG, INFO, WARNING, or ERROR (case-insensitive). "
+            "When unset, the SDK logs at WARNING."
+        ),
+    )
+
+    @field_validator("log_level")
+    @classmethod
+    def _normalize_log_level(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.upper()
+        allowed = {"DEBUG", "INFO", "WARNING", "ERROR"}
+        if normalized not in allowed:
+            raise ValueError(
+                f"Invalid log_level: {value!r}. "
+                f"Must be one of: {', '.join(sorted(allowed))}."
+            )
+        return normalized
+
+    @model_validator(mode="after")
+    def _validate_env_secrets_no_overlap(self) -> DispatchConfig:
+        return _config_validation.validate_env_secret_overlap(self)
+
+    def to_yaml_dict(self) -> dict[str, Any]:
+        """Convert to a dictionary suitable for YAML serialization.
+
+        Excludes None values, drops empty collections, and converts nested
+        models to plain dicts with canonical key ordering. ``resources`` is
+        always included because it carries defaults.
+        """
+        result: dict[str, Any] = {}
+
+        if self.namespace is not None:
+            result["namespace"] = self.namespace
+        if self.agent_name is not None:
+            result["agent_name"] = self.agent_name
+        if self.entrypoint is not None:
+            result["entrypoint"] = self.entrypoint
+        if self.base_image is not None:
+            result["base_image"] = self.base_image
+        if self.system_packages:
+            result["system_packages"] = self.system_packages
+        if self.local_dependencies:
+            result["local_dependencies"] = self.local_dependencies
+        if self.env:
+            result["env"] = dict(self.env)
+        if self.vars:
+            result["vars"] = dict(self.vars)
+        if self.secrets:
+            result["secrets"] = [
+                {"name": s.name, "secret_id": s.secret_id} for s in self.secrets
+            ]
+        if self.mcp_servers:
+            result["mcp_servers"] = [{"server": m.server} for m in self.mcp_servers]
+        if self.volumes:
+            result["volumes"] = [
+                {"name": v.name, "mountPath": v.mount_path, "mode": v.mode.value}
+                for v in self.volumes
+            ]
+        # Always include resources since it has defaults.
+        result["resources"] = {
+            "limits": {
+                "cpu": self.resources.limits.cpu,
+                "memory": self.resources.limits.memory,
+            }
+        }
+
+        if self.network is not None:
+            result["network"] = {
+                "egress": {
+                    "allow_domains": [
+                        d.model_dump(exclude_none=True)
+                        for d in self.network.egress.allow_domains
+                    ],
+                }
+            }
+
+        # Only serialize when the author opted out of the default (instrumented).
+        if not self.llm_instrument:
+            result["llm_instrument"] = False
+
+        if self.log_level is not None:
+            result["log_level"] = self.log_level
+
+        return result
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+
+__all__ = [
+    "BasePayload",
+    "DispatchConfig",
+    "DomainSelector",
+    "EgressConfig",
+    "GitHubAppToken",
+    "HandlerMetadata",
+    "InvocationContext",
+    "InvocationResult",
+    "InvocationStatus",
+    "JsonArray",
+    "JsonObject",
+    "JsonScalar",
+    "JsonValue",
+    "KVGetResponse",
+    "KVListResponse",
+    "KVMemoryRecord",
+    "LLMFunctionCall",
+    "LLMMessage",
+    "LLMResponse",
+    "LLMToolCall",
+    "MemoryWriteResponse",
+    "SessionGetResponse",
+    "MCPServerConfig",
+    "MCPGetPromptResult",
+    "MCPListPromptsResult",
+    "MCPListResourcesResult",
+    "MCPListToolsResult",
+    "MCPPrompt",
+    "MCPReadResourceResult",
+    "MCPResource",
+    "MCPTool",
+    "MCPToolCallResult",
+    "McpHttpServerConfig",
+    "NetworkConfig",
+    "ResourceConfig",
+    "ResourceLimits",
+    "SecretConfig",
+    "VolumeConfig",
+    "VolumeMode",
+]

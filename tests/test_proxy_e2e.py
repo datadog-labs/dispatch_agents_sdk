@@ -14,8 +14,8 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-from dispatch_agents.instrument import auto_instrument
-from dispatch_agents.proxy.server import (
+from dispatch_agents._internal.instrument import auto_instrument
+from dispatch_agents._internal.proxy.server import (
     ANTHROPIC_MESSAGES_ROUTE,
     OPENAI_CHAT_ROUTE,
     run_server,
@@ -118,7 +118,7 @@ class TestAutoInstrumentWiring:
         with patch.dict(os.environ, {"DISPATCH_LLM_PROXY_URL": proxy_url}):
             auto_instrument()
 
-            from dispatch_agents.instrument import _is_proxy_bound
+            from dispatch_agents._internal.instrument import _is_proxy_bound
 
             assert _is_proxy_bound(f"{proxy_url}/v1/chat/completions") is True
             assert (
@@ -130,6 +130,6 @@ class TestAutoInstrumentWiring:
             os.environ.pop("DISPATCH_LLM_PROXY_URL", None)
             auto_instrument()
 
-            from dispatch_agents.instrument import _is_proxy_bound
+            from dispatch_agents._internal.instrument import _is_proxy_bound
 
             assert _is_proxy_bound("http://127.0.0.1:8780/v1/chat") is False
