@@ -26,6 +26,7 @@ from dispatch_agents._internal.dispatch import (
     get_current_trace_id,
     get_invocation_id_for_trace,
 )
+from dispatch_agents.logging import get_logger
 
 if TYPE_CHECKING:
     from dispatch_agents.models import (
@@ -40,6 +41,8 @@ if TYPE_CHECKING:
     )
 
 __all__ = ["MCPClient", "get_mcp_client", "get_mcp_servers_config"]
+
+_logger = get_logger(__name__)
 
 MCP_CONFIG_PATH = os.environ.get("MCP_CONFIG_PATH", ".mcp.json")
 
@@ -282,12 +285,27 @@ def _get_dispatch_mcp_servers() -> dict[str, Any]:
 
     Constructs URLs and auth headers from runtime environment variables
     (``DISPATCH_MCP_GATEWAY_URL``, ``DISPATCH_NAMESPACE``, ``DISPATCH_API_KEY``).
-    No file I/O.
+    No file I/O. Returns ``{}`` in local dev, where the gateway is unavailable.
     """
+    from dispatch_agents._internal.transport import is_local_dev_mode
     from dispatch_agents.config import _load_runtime_config
 
     cfg = _load_runtime_config()
     if not cfg.mcp_servers:
+        return {}
+
+    # The MCP gateway is a deployed/production concern; it is not available under
+    # `dispatch agent dev` (the local router does not proxy /api/v1/mcp/...). Skip
+    # dispatch-managed servers in local dev rather than crashing on the missing
+    # gateway URL. Authors who want to exercise MCP locally supply a .mcp.json.
+    if is_local_dev_mode():
+        names = ", ".join(s.server for s in cfg.mcp_servers)
+        _logger.warning(
+            "Skipping dispatch-managed MCP server(s) in local dev mode: %s. "
+            "The MCP gateway is not available under `dispatch agent dev`. "
+            "To test MCP locally, define the server(s) in a .mcp.json file.",
+            names,
+        )
         return {}
 
     gateway = _require_env("DISPATCH_MCP_GATEWAY_URL")
@@ -346,13 +364,25 @@ def _get_merged_mcp_servers() -> dict[str, Any]:
 
 def _get_server_config(server_name: str) -> dict[str, Any]:
     """Get configuration for a specific MCP server."""
+    from dispatch_agents._internal.transport import is_local_dev_mode
+
     servers = _get_merged_mcp_servers()
     if server_name not in servers:
         available = list(servers.keys())
-        raise ValueError(
+        message = (
             f"MCP server '{server_name}' not found in config. "
             f"Available servers: {available}"
         )
+        # Dispatch-managed servers are skipped under `dispatch agent dev` (the
+        # local router does not proxy the MCP gateway), so a server declared in
+        # dispatch.yaml will be absent here. Point the author at the local escape
+        # hatch rather than leaving them with a bare "not found".
+        if is_local_dev_mode():
+            message += (
+                " Dispatch-managed MCP servers are skipped under `dispatch agent "
+                "dev`; define the server in a .mcp.json file to use it locally."
+            )
+        raise ValueError(message)
     return servers[server_name]
 
 
@@ -364,6 +394,10 @@ def get_mcp_servers_config() -> dict[str, McpHttpServerConfig]:
     ``DISPATCH_NAMESPACE``, ``DISPATCH_API_KEY``). Any user-provided ``.mcp.json``
     is merged additively; duplicate names with dispatch-managed servers are
     rejected.
+
+    In local dev (``dispatch agent dev``) the MCP gateway is unavailable, so
+    dispatch-managed servers are skipped and only ``.mcp.json`` servers are
+    returned.
 
     Returns:
         Mapping of server name to HTTP URL and headers.

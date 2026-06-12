@@ -5,6 +5,7 @@ config builders.
 """
 
 import json
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -272,6 +273,7 @@ class TestGetDispatchMcpServers:
 
     def test_missing_required_env_raises(self, monkeypatch):
         monkeypatch.delenv("DISPATCH_MCP_GATEWAY_URL", raising=False)
+        monkeypatch.delenv("DISPATCH_LOCAL_DEV", raising=False)
         monkeypatch.setenv("DISPATCH_NAMESPACE", "ns")
         monkeypatch.setenv("DISPATCH_API_KEY", "key")
 
@@ -284,6 +286,33 @@ class TestGetDispatchMcpServers:
             pytest.raises(RuntimeError, match="DISPATCH_MCP_GATEWAY_URL is required"),
         ):
             _get_dispatch_mcp_servers()
+
+    def test_local_dev_skips_dispatch_servers(self, monkeypatch, caplog):
+        # In local dev the MCP gateway is unavailable, so dispatch-managed
+        # servers are skipped (with a warning) instead of crashing.
+        monkeypatch.setenv("DISPATCH_LOCAL_DEV", "true")
+        monkeypatch.delenv("DISPATCH_MCP_GATEWAY_URL", raising=False)
+
+        config = DispatchConfig(
+            mcp_servers=[MCPServerConfig(server="my-server")],
+        )
+
+        # The SDK logger sets propagate=False, so caplog's root handler never
+        # sees the record. Attach caplog's handler to the SDK logger directly.
+        sdk_logger = logging.getLogger("dispatch_agents")
+        sdk_logger.addHandler(caplog.handler)
+        try:
+            with patch(
+                "dispatch_agents.config._load_runtime_config", return_value=config
+            ):
+                with caplog.at_level("WARNING", logger="dispatch_agents"):
+                    result = _get_dispatch_mcp_servers()
+        finally:
+            sdk_logger.removeHandler(caplog.handler)
+
+        assert result == {}
+        assert "local dev mode" in caplog.text
+        assert "my-server" in caplog.text
 
 
 class TestGetMergedMcpServers:
@@ -326,6 +355,28 @@ class TestGetMergedMcpServers:
 
         assert list(result) == ["dispatch-server"]
 
+    def test_local_dev_uses_only_user_servers(self, tmp_path, monkeypatch):
+        # In local dev, dispatch-managed servers are skipped, so the merged set
+        # comes entirely from the user's .mcp.json -- no gateway URL required.
+        monkeypatch.setenv("DISPATCH_LOCAL_DEV", "true")
+        monkeypatch.delenv("DISPATCH_MCP_GATEWAY_URL", raising=False)
+
+        config = DispatchConfig(
+            mcp_servers=[MCPServerConfig(server="dispatch-server")],
+        )
+
+        user_config = {"mcpServers": {"user-server": {"url": "http://user:3000"}}}
+        config_file = tmp_path / ".mcp.json"
+        config_file.write_text(json.dumps(user_config))
+
+        with (
+            patch("dispatch_agents.config._load_runtime_config", return_value=config),
+            patch("dispatch_agents.mcp.MCP_CONFIG_PATH", str(config_file)),
+        ):
+            result = _get_merged_mcp_servers()
+
+        assert list(result) == ["user-server"]
+
     def test_duplicate_user_server_raises(self, tmp_path, monkeypatch):
         monkeypatch.setenv("DISPATCH_MCP_GATEWAY_URL", "https://gw.example.com")
         monkeypatch.setenv("DISPATCH_NAMESPACE", "ns")
@@ -350,13 +401,28 @@ class TestGetMergedMcpServers:
 
 
 class TestGetServerConfig:
-    def test_not_found_raises(self, tmp_path):
+    def test_not_found_raises(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("DISPATCH_LOCAL_DEV", raising=False)
         config = {"mcpServers": {"other-server": {"url": "http://localhost:3000"}}}
         config_file = tmp_path / ".mcp.json"
         config_file.write_text(json.dumps(config))
 
         with patch("dispatch_agents.mcp.MCP_CONFIG_PATH", str(config_file)):
-            with pytest.raises(ValueError, match="not found in config"):
+            with pytest.raises(ValueError, match="not found in config") as exc_info:
+                _get_server_config("missing-server")
+        # Outside local dev, no dev-mode hint is appended.
+        assert "dispatch agent dev" not in str(exc_info.value)
+
+    def test_not_found_in_local_dev_hints_at_mcp_json(self, tmp_path, monkeypatch):
+        # In local dev a dispatch-managed server is skipped, so it is absent here.
+        # The error should point the author at the .mcp.json escape hatch instead
+        # of leaving them with a bare "not found".
+        monkeypatch.setenv("DISPATCH_LOCAL_DEV", "true")
+        config_file = tmp_path / ".mcp.json"
+        config_file.write_text(json.dumps({"mcpServers": {}}))
+
+        with patch("dispatch_agents.mcp.MCP_CONFIG_PATH", str(config_file)):
+            with pytest.raises(ValueError, match="dispatch agent dev"):
                 _get_server_config("missing-server")
 
     def test_returns_server_config(self, tmp_path):
