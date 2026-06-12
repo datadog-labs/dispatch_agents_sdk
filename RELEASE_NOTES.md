@@ -1,2 +1,2 @@
-## Features
-- The logging configuration module is now publicly accessible as `dispatch_agents.logging`, allowing users to directly import and use logging utilities from the top-level package.
+## Bug Fixes
+- MCP servers managed by Dispatch are now correctly skipped during local development, preventing unintended interactions with remotely managed server configurations.
