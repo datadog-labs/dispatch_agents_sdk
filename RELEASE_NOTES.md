@@ -1,2 +1,2 @@
 ## Bug Fixes
-- MCP servers managed by Dispatch are now correctly skipped during local development, preventing unintended interactions with remotely managed server configurations.
+- Managed MCP servers now take precedence over colliding entries defined in `.mcp.json`, ensuring consistent server configuration when conflicts arise.
