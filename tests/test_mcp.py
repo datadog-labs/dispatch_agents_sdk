@@ -33,6 +33,21 @@ def isolate_runtime_config(monkeypatch):
     _load_runtime_config.cache_clear()
 
 
+@pytest.fixture
+def sdk_caplog(caplog):
+    """``caplog`` that captures the ``dispatch_agents`` logger.
+
+    The SDK logger sets ``propagate=False``, so caplog's root handler never sees
+    its records. Attach caplog's handler directly and detach it afterwards.
+    """
+    sdk_logger = logging.getLogger("dispatch_agents")
+    sdk_logger.addHandler(caplog.handler)
+    try:
+        yield caplog
+    finally:
+        sdk_logger.removeHandler(caplog.handler)
+
+
 # ── _build_trace_meta ────────────────────────────────────────────────
 
 
@@ -287,7 +302,7 @@ class TestGetDispatchMcpServers:
         ):
             _get_dispatch_mcp_servers()
 
-    def test_local_dev_skips_dispatch_servers(self, monkeypatch, caplog):
+    def test_local_dev_skips_dispatch_servers(self, monkeypatch, sdk_caplog):
         # In local dev the MCP gateway is unavailable, so dispatch-managed
         # servers are skipped (with a warning) instead of crashing.
         monkeypatch.setenv("DISPATCH_LOCAL_DEV", "true")
@@ -297,22 +312,15 @@ class TestGetDispatchMcpServers:
             mcp_servers=[MCPServerConfig(server="my-server")],
         )
 
-        # The SDK logger sets propagate=False, so caplog's root handler never
-        # sees the record. Attach caplog's handler to the SDK logger directly.
-        sdk_logger = logging.getLogger("dispatch_agents")
-        sdk_logger.addHandler(caplog.handler)
-        try:
-            with patch(
-                "dispatch_agents.config._load_runtime_config", return_value=config
-            ):
-                with caplog.at_level("WARNING", logger="dispatch_agents"):
-                    result = _get_dispatch_mcp_servers()
-        finally:
-            sdk_logger.removeHandler(caplog.handler)
+        with (
+            patch("dispatch_agents.config._load_runtime_config", return_value=config),
+            sdk_caplog.at_level("WARNING", logger="dispatch_agents"),
+        ):
+            result = _get_dispatch_mcp_servers()
 
         assert result == {}
-        assert "local dev mode" in caplog.text
-        assert "my-server" in caplog.text
+        assert "local dev mode" in sdk_caplog.text
+        assert "my-server" in sdk_caplog.text
 
 
 class TestGetMergedMcpServers:
@@ -377,7 +385,11 @@ class TestGetMergedMcpServers:
 
         assert list(result) == ["user-server"]
 
-    def test_duplicate_user_server_raises(self, tmp_path, monkeypatch):
+    def test_dispatch_server_overrides_colliding_user_server(
+        self, tmp_path, monkeypatch
+    ):
+        # On a name collision the dispatch-managed server takes precedence over
+        # the .mcp.json entry (no exception): the managed gateway URL wins.
         monkeypatch.setenv("DISPATCH_MCP_GATEWAY_URL", "https://gw.example.com")
         monkeypatch.setenv("DISPATCH_NAMESPACE", "ns")
         monkeypatch.setenv("DISPATCH_API_KEY", "key")
@@ -395,9 +407,63 @@ class TestGetMergedMcpServers:
         with (
             patch("dispatch_agents.config._load_runtime_config", return_value=config),
             patch("dispatch_agents.mcp.MCP_CONFIG_PATH", str(config_file)),
-            pytest.raises(ValueError, match="duplicates dispatch-managed"),
+        ):
+            result = _get_merged_mcp_servers()
+
+        assert list(result) == ["shared-server"]
+        assert (
+            result["shared-server"]["url"]
+            == "https://gw.example.com/api/v1/mcp/namespaces/ns/proxy/shared-server"
+        )
+
+    def test_override_logs_debug_message(self, tmp_path, monkeypatch, sdk_caplog):
+        monkeypatch.setenv("DISPATCH_MCP_GATEWAY_URL", "https://gw.example.com")
+        monkeypatch.setenv("DISPATCH_NAMESPACE", "ns")
+        monkeypatch.setenv("DISPATCH_API_KEY", "key")
+
+        config = DispatchConfig(
+            mcp_servers=[MCPServerConfig(server="shared-server")],
+        )
+
+        user_config = {
+            "mcpServers": {"shared-server": {"url": "http://user-override:9999"}}
+        }
+        config_file = tmp_path / ".mcp.json"
+        config_file.write_text(json.dumps(user_config))
+
+        with (
+            patch("dispatch_agents.config._load_runtime_config", return_value=config),
+            patch("dispatch_agents.mcp.MCP_CONFIG_PATH", str(config_file)),
+            sdk_caplog.at_level("DEBUG", logger="dispatch_agents"),
         ):
             _get_merged_mcp_servers()
+
+        assert "override .mcp.json" in sdk_caplog.text
+        assert "shared-server" in sdk_caplog.text
+
+    def test_no_override_log_without_collision(self, tmp_path, monkeypatch, sdk_caplog):
+        # When dispatch-managed and .mcp.json servers have distinct names, the
+        # override log must stay silent -- it should only fire on a real collision.
+        monkeypatch.setenv("DISPATCH_MCP_GATEWAY_URL", "https://gw.example.com")
+        monkeypatch.setenv("DISPATCH_NAMESPACE", "ns")
+        monkeypatch.setenv("DISPATCH_API_KEY", "key")
+
+        config = DispatchConfig(
+            mcp_servers=[MCPServerConfig(server="dispatch-server")],
+        )
+
+        user_config = {"mcpServers": {"user-server": {"url": "http://user:3000"}}}
+        config_file = tmp_path / ".mcp.json"
+        config_file.write_text(json.dumps(user_config))
+
+        with (
+            patch("dispatch_agents.config._load_runtime_config", return_value=config),
+            patch("dispatch_agents.mcp.MCP_CONFIG_PATH", str(config_file)),
+            sdk_caplog.at_level("DEBUG", logger="dispatch_agents"),
+        ):
+            _get_merged_mcp_servers()
+
+        assert "override .mcp.json" not in sdk_caplog.text
 
 
 class TestGetServerConfig:

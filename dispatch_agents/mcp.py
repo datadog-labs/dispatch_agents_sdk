@@ -345,21 +345,23 @@ def _get_merged_mcp_servers() -> dict[str, Any]:
 
     Dispatch-managed servers come from the ``mcp_servers`` list in
     ``dispatch.yaml``; their URLs and credentials are constructed from runtime
-    environment variables. User-provided servers (from ``.mcp.json``) may extend
-    the config additively but must not shadow dispatch-managed server names.
+    environment variables. User-provided servers (from ``.mcp.json``) extend the
+    config additively. On a name collision the dispatch-managed server takes
+    precedence and overrides the ``.mcp.json`` entry. In local dev the managed set
+    is empty (the gateway is unavailable), so ``.mcp.json`` is authoritative.
     """
     dispatch_servers = _get_dispatch_mcp_servers()
     user_servers = _get_user_mcp_servers()
 
-    duplicate_names = sorted(dispatch_servers.keys() & user_servers.keys())
-    if duplicate_names:
-        names = ", ".join(duplicate_names)
-        raise ValueError(
-            f"User .mcp.json duplicates dispatch-managed MCP server name(s): {names}. "
-            "Rename the user-provided server or remove the duplicate entry."
+    overridden = sorted(dispatch_servers.keys() & user_servers.keys())
+    if overridden:
+        _logger.debug(
+            "Dispatch-managed MCP server(s) override .mcp.json entries: %s",
+            ", ".join(overridden),
         )
 
-    return {**dispatch_servers, **user_servers}
+    # Managed last => managed wins on collision.
+    return {**user_servers, **dispatch_servers}
 
 
 def _get_server_config(server_name: str) -> dict[str, Any]:
@@ -392,8 +394,8 @@ def get_mcp_servers_config() -> dict[str, McpHttpServerConfig]:
     Servers declared in ``dispatch.yaml`` under ``mcp_servers`` are constructed
     from runtime environment variables (``DISPATCH_MCP_GATEWAY_URL``,
     ``DISPATCH_NAMESPACE``, ``DISPATCH_API_KEY``). Any user-provided ``.mcp.json``
-    is merged additively; duplicate names with dispatch-managed servers are
-    rejected.
+    is merged additively; on a name collision the dispatch-managed server takes
+    precedence and overrides the ``.mcp.json`` entry.
 
     In local dev (``dispatch agent dev``) the MCP gateway is unavailable, so
     dispatch-managed servers are skipped and only ``.mcp.json`` servers are
@@ -403,7 +405,6 @@ def get_mcp_servers_config() -> dict[str, McpHttpServerConfig]:
         Mapping of server name to HTTP URL and headers.
 
     Raises:
-        ValueError: If a user server name collides with a dispatch-managed one.
         RuntimeError: If required environment variables are missing.
     """
     mcp_servers: dict[str, McpHttpServerConfig] = {}
