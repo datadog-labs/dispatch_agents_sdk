@@ -1,2 +1,2 @@
 ## Bug Fixes
-- Removed the Claude Code plugin integration, which was non-functional. Users should refer to the MCP operator for equivalent functionality.
+- Managed MCP servers now take precedence over colliding entries defined in `.mcp.json`, ensuring consistent server configuration when conflicts arise.

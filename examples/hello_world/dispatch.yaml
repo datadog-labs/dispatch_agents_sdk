@@ -1,7 +1,7 @@
 namespace: examples
-agent_name: hello-world
 entrypoint: agent.py
 system_packages: []
+agent_name: hello-world
 volumes:
 - name: data
   mountPath: /data
