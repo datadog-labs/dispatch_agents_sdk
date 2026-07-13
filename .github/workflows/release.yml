@@ -43,6 +43,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 0   # full history so we can read all tags
+          persist-credentials: false   # don't let GITHUB_TOKEN creds override the dd-octo-sts token on push
 
       - name: Download dist artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
