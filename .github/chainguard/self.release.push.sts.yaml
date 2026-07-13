@@ -1,0 +1,12 @@
+# Docs: https://datadoghq.atlassian.net/wiki/spaces/SECENG/pages/5138645099/User+guide+dd-octo-sts
+issuer: https://token.actions.githubusercontent.com
+
+subject: repo:datadog-labs/dispatch_agents_sdk:ref:refs/heads/main
+
+claim_pattern:
+  event_name: push
+  ref: refs/heads/main
+  job_workflow_ref: datadog-labs/dispatch_agents_sdk/\.github/workflows/release\.yml@refs/heads/main
+
+permissions:
+  contents: write
