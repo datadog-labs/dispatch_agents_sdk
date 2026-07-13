@@ -25,6 +25,7 @@ install_proto_import_path()
 
 from . import context, llm, models
 from .config import config
+from .evals import EvalBatch, EvalItem
 from .events import emit_event
 from .handlers import fn, init, on
 from .invocation import invoke
@@ -39,6 +40,8 @@ __all__ = [
     "config",
     "context",
     "DisallowedWriteError",
+    "EvalBatch",
+    "EvalItem",
     "emit_event",
     "extra_headers",
     "fn",

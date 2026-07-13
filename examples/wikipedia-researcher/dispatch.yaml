@@ -1,0 +1,9 @@
+namespace: examples
+entrypoint: agent.py
+base_image: python:3.13-slim
+system_packages: []
+agent_name: wikipedia-researcher
+network:
+  egress:
+    allow_domains:
+      - match_name: en.wikipedia.org
