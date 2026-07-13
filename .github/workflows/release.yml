@@ -5,6 +5,12 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      skip_tag_and_release:
+        description: Skip creating the git tag and GitHub Release (use when they already exist) and just run CI + publish for the selected ref/tag.
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -27,7 +33,7 @@ jobs:
   release:
     name: Tag & Release
     needs: [version_policy, ci]
-    if: needs.version_policy.outputs.should_release == 'true'
+    if: needs.version_policy.outputs.should_release == 'true' || (github.event_name == 'workflow_dispatch' && inputs.skip_tag_and_release)
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -44,6 +50,7 @@ jobs:
           path: dist/
 
       - name: Create git tag
+        if: ${{ !inputs.skip_tag_and_release }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -51,6 +58,7 @@ jobs:
           git push origin "${{ needs.version_policy.outputs.current_tag }}"
 
       - name: Create GitHub Release
+        if: ${{ !inputs.skip_tag_and_release }}
         uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe
         with:
           tag_name: "${{ needs.version_policy.outputs.current_tag }}"
@@ -61,7 +69,7 @@ jobs:
   publish:
     name: Publish
     needs: [version_policy, ci, release]
-    if: needs.version_policy.outputs.should_release == 'true'
+    if: needs.version_policy.outputs.should_release == 'true' || (github.event_name == 'workflow_dispatch' && inputs.skip_tag_and_release)
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
