@@ -37,6 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -49,12 +50,27 @@ jobs:
           name: dist
           path: dist/
 
+      - name: Get dd-octo-sts token
+        if: ${{ !inputs.skip_tag_and_release }}
+        id: octo-sts
+        uses: DataDog/dd-octo-sts-action@96a25462dbcb10ebf0bfd6e2ccc917d2ab235b9a # v1.0.4
+        with:
+          scope: datadog-labs/dispatch_agents_sdk
+          policy: self.release.push
+
+      - name: Verify dd-octo-sts token
+        if: ${{ !inputs.skip_tag_and_release }}
+        run: gh auth status
+        env:
+          GH_TOKEN: ${{ steps.octo-sts.outputs.token }}
+
       - name: Create git tag
         if: ${{ !inputs.skip_tag_and_release }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag "${{ needs.version_policy.outputs.current_tag }}"
+          git remote set-url origin "https://x-access-token:${{ steps.octo-sts.outputs.token }}@github.com/${{ github.repository }}.git"
           git push origin "${{ needs.version_policy.outputs.current_tag }}"
 
       - name: Create GitHub Release
