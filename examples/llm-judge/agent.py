@@ -2,7 +2,7 @@
 
 Designed to be wired up as an *invoker scorer* on the experiment runner
 (see the evals-experiments PR). Receives a single
-:class:`dispatch_agents.EvalItem` per case and returns a binary score
+:class:`dispatch_agents.models.EvalItem` per case and returns a binary score
 plus a one-sentence reason and confidence.
 
 Because it takes ``EvalItem`` directly, you can attach it as an invoker
@@ -23,7 +23,8 @@ import json
 import logging
 import re
 
-from dispatch_agents import BasePayload, EvalItem, fn, llm
+from dispatch_agents import BasePayload, fn, llm
+from dispatch_agents.models import EvalItem
 
 logger = logging.getLogger(__name__)
 

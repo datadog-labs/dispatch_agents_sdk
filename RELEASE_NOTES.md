@@ -1,2 +1,2 @@
-## Bug Fixes
-- Removed the Claude Code plugin integration, which was non-functional. Users should refer to the MCP operator for equivalent functionality.
+## Breaking Changes
+- `EvalItem` and `EvalBatch` have been moved from `dispatch_agents.evals` into `dispatch_agents.models`. Update any imports accordingly.
