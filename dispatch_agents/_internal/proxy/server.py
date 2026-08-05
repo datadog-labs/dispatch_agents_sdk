@@ -539,7 +539,7 @@ async def _proxy_to_backend(
                 _log_fallback_call(
                     body,
                     provider_format,
-                    fallback_resp.body,
+                    bytes(fallback_resp.body),
                     trace_id,
                     invocation_id,
                     elapsed_ms,
@@ -633,7 +633,7 @@ async def _proxy_to_backend(
                 _log_fallback_call(
                     body,
                     provider_format,
-                    fallback_resp.body,
+                    bytes(fallback_resp.body),
                     trace_id,
                     invocation_id,
                     elapsed_ms,
@@ -667,7 +667,7 @@ async def _proxy_to_backend(
                     _log_fallback_call(
                         body,
                         provider_format,
-                        fallback_resp.body,
+                        bytes(fallback_resp.body),
                         trace_id,
                         invocation_id,
                         elapsed_ms,

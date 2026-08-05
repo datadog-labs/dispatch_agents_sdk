@@ -908,14 +908,14 @@ class TestCallProviderDirectly:
     async def test_no_api_key_openai(self):
         resp = await _call_provider_directly({"messages": []}, "openai")
         assert resp.status_code == 401
-        body = json.loads(resp.body)
+        body = json.loads(bytes(resp.body))
         assert "OPENAI_API_KEY" in body["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_no_api_key_anthropic(self):
         resp = await _call_provider_directly({"messages": []}, "anthropic")
         assert resp.status_code == 401
-        body = json.loads(resp.body)
+        body = json.loads(bytes(resp.body))
         assert body["type"] == "error"
         assert "ANTHROPIC_API_KEY" in body["error"]["message"]
 
@@ -950,7 +950,7 @@ class TestCallProviderDirectly:
             fallback_keys=FallbackKeys(ANTHROPIC_API_KEY="sk-ant-test"),
         )
         assert resp.status_code == 502
-        body = json.loads(resp.body)
+        body = json.loads(bytes(resp.body))
         assert body["type"] == "error"
 
 
