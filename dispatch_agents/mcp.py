@@ -16,8 +16,9 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+import httpx
 from mcp import ClientSession as _ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 from pydantic import AnyUrl
 
 import dispatch_agents.models as _models
@@ -460,10 +461,13 @@ async def get_mcp_client(
 
     headers = _extract_string_map(server_config.get("headers"))
 
-    async with streamablehttp_client(url=url, headers=headers, timeout=timeout) as (
-        read_stream,
-        write_stream,
-        _,
+    async with (
+        httpx.AsyncClient(headers=headers, timeout=timeout) as http_client,
+        streamable_http_client(url=url, http_client=http_client) as (
+            read_stream,
+            write_stream,
+            _,
+        ),
     ):
         async with _ClientSession(
             read_stream,

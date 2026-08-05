@@ -11,9 +11,10 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
+import httpx
 from claude_agent_sdk import McpSdkServerConfig, SdkMcpTool, create_sdk_mcp_server
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 from mcp.types import Tool
 
 from dispatch_agents.mcp import get_mcp_client, get_mcp_servers_config
@@ -38,10 +39,13 @@ async def _get_server_info_and_tools(
     tools: list[Tool] = []
 
     try:
-        async with streamablehttp_client(url=url, headers=headers) as (
-            read_stream,
-            write_stream,
-            _,
+        async with (
+            httpx.AsyncClient(headers=headers) as http_client,
+            streamable_http_client(url=url, http_client=http_client) as (
+                read_stream,
+                write_stream,
+                _,
+            ),
         ):
             async with ClientSession(
                 read_stream,

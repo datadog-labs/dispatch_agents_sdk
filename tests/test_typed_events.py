@@ -485,7 +485,7 @@ def test_function_message_unknown_handler():
     with pytest.raises(ValueError, match="No handler registered: nonexistent_function"):
         import asyncio
 
-        asyncio.get_event_loop().run_until_complete(dispatch_message(message))
+        asyncio.run(dispatch_message(message))
 
 
 @pytest.mark.asyncio
